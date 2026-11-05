@@ -2,6 +2,10 @@
 
 ## Zyro Management für Windows und macOS
 
+### macOS-App aktualisieren
+
+In der installierten macOS-App öffnet **Mac-Update herunterladen** die GitHub-Actions-Seite für den Mac-Build. Öffne den neuesten erfolgreichen Lauf von **Build macOS installer**, lade das Artefakt `zyro-management-macos` herunter und installiere die enthaltene DMG. Neue Builds werden nach Änderungen am Desktop-Code auf `main` automatisch erstellt; die Artefakte bleiben 90 Tage verfügbar. macOS-Selbstupdates sind ohne Apple-Developer-Signierung nicht möglich, deshalb führt der Button zum aktuellen Installer statt einen nicht unterstützten Hintergrund-Updater zu starten.
+
 ### Webshop-Versand
 
 Privatkunden zahlen DHL-Paketversand nach Gewicht. Freigegebene Geschäftskunden erhalten Speditionsversand für 85,00 € pro Palette; standardmäßig werden je angefangene 64 24er-Trays eine Palette berechnet. Speditionspreis und Trays je Palette können in der Desktop-App unter **Shop → Versandkosten** angepasst werden.

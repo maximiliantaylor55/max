@@ -3086,8 +3086,10 @@ const configureAutoUpdates = () => {
 }
 
 let desktopUpdateState = {
-  supported: app.isPackaged && process.platform === 'win32',
-  status: 'idle',
+  supported: app.isPackaged && ['win32', 'darwin'].includes(process.platform),
+  automatic: app.isPackaged && process.platform === 'win32',
+  platform: process.platform,
+  status: process.platform === 'darwin' ? 'manual' : 'idle',
   currentVersion: app.getVersion(),
   availableVersion: '',
   percent: 0,
@@ -3103,8 +3105,8 @@ const publishDesktopUpdateState = (changes) => {
 }
 
 const assertDesktopUpdatesSupported = () => {
-  if (!desktopUpdateState.supported) {
-    throw new Error('Automatische Updates sind nur in der installierten Windows-Desktop-App verfügbar.')
+  if (!desktopUpdateState.automatic) {
+    throw new Error('Automatische Updates sind für diese Plattform nicht verfügbar.')
   }
 }
 
@@ -3146,6 +3148,15 @@ ipcMain.handle('zyro-updater:install', (event) => {
   if (desktopUpdateState.status !== 'downloaded') throw new Error('Das Update ist noch nicht vollständig heruntergeladen.')
   autoUpdater.quitAndInstall(false, true)
   return { installing: true }
+})
+
+ipcMain.handle('zyro-updater:open-macos-downloads', async (event) => {
+  assertTrustedFrame(event)
+  if (process.platform !== 'darwin' || !app.isPackaged) {
+    throw new Error('Der Mac-Installer ist nur in der installierten macOS-App verfügbar.')
+  }
+  await shell.openExternal('https://github.com/maximiliantaylor55/max/actions/workflows/build-macos.yml')
+  return { opened: true }
 })
 
 app.whenReady().then(async () => {

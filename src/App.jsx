@@ -6365,7 +6365,9 @@ function App() {
     if (!window.zyroUpdater || desktopUpdateBusy) return
     setDesktopUpdateBusy(true)
     try {
-      if (desktopUpdateState?.status === 'available') {
+      if (desktopUpdateState?.platform === 'darwin') {
+        await window.zyroUpdater.openMacDownloads()
+      } else if (desktopUpdateState?.status === 'available') {
         await window.zyroUpdater.download()
       } else if (desktopUpdateState?.status === 'downloaded') {
         await window.zyroUpdater.install()
@@ -7020,7 +7022,9 @@ function App() {
                   onClick={handleDesktopUpdate}
                   disabled={desktopUpdateBusy || ['checking', 'downloading'].includes(desktopUpdateState.status)}
                 >
-                  {desktopUpdateState.status === 'downloading'
+                  {desktopUpdateState.platform === 'darwin'
+                    ? 'Mac-Update herunterladen'
+                    : desktopUpdateState.status === 'downloading'
                     ? `Update wird geladen … ${desktopUpdateState.percent}%`
                     : desktopUpdateBusy || desktopUpdateState.status === 'checking'
                     ? 'Suche nach Updates …'
@@ -7031,7 +7035,9 @@ function App() {
                           : 'Nach Updates suchen'}
                 </button>
                 <small role="status" aria-live="polite">
-                  {desktopUpdateState.status === 'available'
+                  {desktopUpdateState.platform === 'darwin'
+                    ? `Version ${desktopUpdateState.currentVersion} · Öffnet den aktuellen Mac-Installer`
+                    : desktopUpdateState.status === 'available'
                     ? `Version ${desktopUpdateState.availableVersion} verfügbar`
                     : desktopUpdateState.status === 'downloading'
                       ? `Download: ${desktopUpdateState.percent}%`

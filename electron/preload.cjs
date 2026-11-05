@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('zyroUpdater', {
   check: () => ipcRenderer.invoke('zyro-updater:check'),
   download: () => ipcRenderer.invoke('zyro-updater:download'),
   install: () => ipcRenderer.invoke('zyro-updater:install'),
+  openMacDownloads: () => ipcRenderer.invoke('zyro-updater:open-macos-downloads'),
   onState: (callback) => {
     const listener = (_event, state) => callback(state)
     ipcRenderer.on('zyro-updater:state', listener)
