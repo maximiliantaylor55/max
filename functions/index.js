@@ -125,7 +125,9 @@ const defaultShopConfig = {
     shippingPricePerKgCents: 0,
     shippingPricePerPalletCents: 8500,
     shippingTraysPerPallet: 64,
+    businessDpdMaxTrays: 2,
     shippingTiers: [],
+    businessDpdShippingTiers: [],
     largeCartonTareGrams: 0,
     smallCartonTareGrams: 0,
     vatRate: 19,
@@ -135,14 +137,14 @@ const defaultShopConfig = {
 }
 
 const cleanShippingTiers = (input) => {
-  if (!Array.isArray(input) || input.length > 10) throw new Error('DHL-Versandstaffeln ungültig.')
+  if (!Array.isArray(input) || input.length > 10) throw new Error('Paketversandstaffeln ungültig.')
   let previousWeight = 0
   return input.map((entry) => {
     const maxWeightGrams = Number(entry?.maxWeightGrams)
     const priceCents = Number(entry?.priceCents)
     if (!Number.isSafeInteger(maxWeightGrams) || maxWeightGrams <= previousWeight || maxWeightGrams > 31500
       || !Number.isSafeInteger(priceCents) || priceCents < 0 || priceCents > 10000000) {
-      throw new Error('DHL-Versandstaffeln ungültig.')
+      throw new Error('Paketversandstaffeln ungültig.')
     }
     previousWeight = maxWeightGrams
     return { maxWeightGrams, priceCents }
@@ -184,8 +186,16 @@ const readShopConfig = async ({ includeDesktop = true } = {}) => {
       if (!Number.isSafeInteger(value) || value < 1 || value > 10000) throw new Error('Paletten-Einstellungen in der Desktop-App sind ungültig.')
       config.settings.shippingTraysPerPallet = value
     }
+    if (shippingSettings.businessDpdMaxTrays !== undefined) {
+      const value = Number(shippingSettings.businessDpdMaxTrays)
+      if (!Number.isSafeInteger(value) || value < 1 || value > 20) throw new Error('DPD-Traygrenze in der Desktop-App ist ungültig.')
+      config.settings.businessDpdMaxTrays = value
+    }
     if (shippingSettings.shippingTiers !== undefined) {
       config.settings.shippingTiers = cleanShippingTiers(shippingSettings.shippingTiers)
+    }
+    if (shippingSettings.businessDpdShippingTiers !== undefined) {
+      config.settings.businessDpdShippingTiers = cleanShippingTiers(shippingSettings.businessDpdShippingTiers)
     }
   }
   if (!Array.isArray(config.products) || config.products.length === 0) config.products = defaultShopConfig.products
@@ -222,11 +232,13 @@ const cleanShopConfig = (input) => {
   const shippingPricePerKgCents = Number(input.settings?.shippingPricePerKgCents)
   const shippingPricePerPalletCents = Number(input.settings?.shippingPricePerPalletCents ?? defaultShopConfig.settings.shippingPricePerPalletCents)
   const shippingTraysPerPallet = Number(input.settings?.shippingTraysPerPallet ?? defaultShopConfig.settings.shippingTraysPerPallet)
+  const businessDpdMaxTrays = Number(input.settings?.businessDpdMaxTrays ?? defaultShopConfig.settings.businessDpdMaxTrays)
   const largeCartonTareGrams = Number(input.settings?.largeCartonTareGrams)
   const smallCartonTareGrams = Number(input.settings?.smallCartonTareGrams)
   const vatRate = Number(input.settings?.vatRate)
   const shippingTiers = cleanShippingTiers(input.settings?.shippingTiers || [])
-  if (!Number.isSafeInteger(shippingPriceCents) || shippingPriceCents < 0 || !Number.isSafeInteger(shippingPricePerKgCents) || shippingPricePerKgCents < 0 || !Number.isSafeInteger(shippingPricePerPalletCents) || shippingPricePerPalletCents < 0 || !Number.isSafeInteger(shippingTraysPerPallet) || shippingTraysPerPallet < 1 || shippingTraysPerPallet > 10000 || !Number.isSafeInteger(largeCartonTareGrams) || largeCartonTareGrams < 0 || !Number.isSafeInteger(smallCartonTareGrams) || smallCartonTareGrams < 0 || ![0, 7, 19].includes(vatRate) || typeof input.settings?.pricesIncludeVat !== 'boolean') {
+  const businessDpdShippingTiers = cleanShippingTiers(input.settings?.businessDpdShippingTiers || [])
+  if (!Number.isSafeInteger(shippingPriceCents) || shippingPriceCents < 0 || !Number.isSafeInteger(shippingPricePerKgCents) || shippingPricePerKgCents < 0 || !Number.isSafeInteger(shippingPricePerPalletCents) || shippingPricePerPalletCents < 0 || !Number.isSafeInteger(shippingTraysPerPallet) || shippingTraysPerPallet < 1 || shippingTraysPerPallet > 10000 || !Number.isSafeInteger(businessDpdMaxTrays) || businessDpdMaxTrays < 1 || businessDpdMaxTrays > 20 || !Number.isSafeInteger(largeCartonTareGrams) || largeCartonTareGrams < 0 || !Number.isSafeInteger(smallCartonTareGrams) || smallCartonTareGrams < 0 || ![0, 7, 19].includes(vatRate) || typeof input.settings?.pricesIncludeVat !== 'boolean') {
     throw new Error('Versand- oder Steuereinstellung ungültig.')
   }
   const payment = {
@@ -236,7 +248,7 @@ const cleanShopConfig = (input) => {
   if (payment.iban && !/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(payment.iban)) throw new Error('IBAN ungültig.')
   return {
     products,
-    settings: { shippingPriceCents, shippingPricePerKgCents, shippingPricePerPalletCents, shippingTraysPerPallet, shippingTiers, largeCartonTareGrams, smallCartonTareGrams, vatRate, pricesIncludeVat: input.settings.pricesIncludeVat },
+    settings: { shippingPriceCents, shippingPricePerKgCents, shippingPricePerPalletCents, shippingTraysPerPallet, businessDpdMaxTrays, shippingTiers, businessDpdShippingTiers, largeCartonTareGrams, smallCartonTareGrams, vatRate, pricesIncludeVat: input.settings.pricesIncludeVat },
     payment,
   }
 }

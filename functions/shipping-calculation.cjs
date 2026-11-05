@@ -20,16 +20,33 @@ const calculateShipping = (items, catalog, settings, { businessCustomer = false 
   let shippingPalletCount = 0
   let shippingMethod = 'DHL Paket (bis 31,5 kg)'
   if (businessCustomer) {
-    const shippingPricePerPalletCents = Number(settings.shippingPricePerPalletCents)
-    const shippingTraysPerPallet = Number(settings.shippingTraysPerPallet)
-    if (!Number.isSafeInteger(shippingPricePerPalletCents) || shippingPricePerPalletCents < 0
-      || !Number.isSafeInteger(shippingTraysPerPallet) || shippingTraysPerPallet < 1) {
-      throw new Error('Speditionskosten sind im Shop-Admin nicht korrekt eingerichtet.')
-    }
     const trayCount = items.reduce((total, item) => total + Math.ceil(item.quantity / 24), 0)
-    shippingPalletCount = Math.max(1, Math.ceil(trayCount / shippingTraysPerPallet))
-    shippingPriceCents = shippingPricePerPalletCents * shippingPalletCount
-    shippingMethod = 'Spedition'
+    const businessDpdMaxTrays = Number(settings.businessDpdMaxTrays ?? 2)
+    if (!Number.isSafeInteger(businessDpdMaxTrays) || businessDpdMaxTrays < 1 || businessDpdMaxTrays > 20) {
+      throw new Error('DPD-Traygrenze ist im Shop-Admin nicht korrekt eingerichtet.')
+    }
+    if (trayCount <= businessDpdMaxTrays && shippingWeightGrams <= 31500) {
+      const dpdTiers = Array.isArray(settings.businessDpdShippingTiers) && settings.businessDpdShippingTiers.length
+        ? settings.businessDpdShippingTiers
+        : settings.shippingTiers
+      if (!Array.isArray(dpdTiers) || dpdTiers.length === 0) {
+        throw new Error('DPD-Versandpreise sind im Shop-Admin nicht korrekt eingerichtet.')
+      }
+      const tier = dpdTiers.find((entry) => shippingWeightGrams <= entry.maxWeightGrams)
+      if (!tier) throw new Error('Für das Bestellgewicht ist kein gültiger DPD-Tarif eingerichtet.')
+      shippingPriceCents = Number(tier.priceCents)
+      shippingMethod = 'DPD Paket (bis 31,5 kg)'
+    } else {
+      const shippingPricePerPalletCents = Number(settings.shippingPricePerPalletCents)
+      const shippingTraysPerPallet = Number(settings.shippingTraysPerPallet)
+      if (!Number.isSafeInteger(shippingPricePerPalletCents) || shippingPricePerPalletCents < 0
+        || !Number.isSafeInteger(shippingTraysPerPallet) || shippingTraysPerPallet < 1) {
+        throw new Error('Speditionskosten sind im Shop-Admin nicht korrekt eingerichtet.')
+      }
+      shippingPalletCount = Math.max(1, Math.ceil(trayCount / shippingTraysPerPallet))
+      shippingPriceCents = shippingPricePerPalletCents * shippingPalletCount
+      shippingMethod = 'Spedition'
+    }
   } else if (Array.isArray(settings.shippingTiers) && settings.shippingTiers.length > 0) {
     const tier = settings.shippingTiers.find((entry) => shippingWeightGrams <= entry.maxWeightGrams)
       || settings.shippingTiers[settings.shippingTiers.length - 1]

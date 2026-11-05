@@ -112,6 +112,7 @@ const defaultShopShippingTiers = [
 ]
 const defaultShopShippingPricePerPalletCents = 8500
 const defaultShopShippingTraysPerPallet = 64
+const defaultBusinessDpdMaxTrays = 2
 
 const salesDocumentStatuses = {
   angebot: ['Offen', 'Angenommen', 'Abgelehnt', 'Abgelaufen'],
@@ -3556,12 +3557,20 @@ function App() {
       maxWeightGrams: tier.maxWeightGrams,
       priceCents: parseEuroCents(form.get(`shippingTier-${tier.maxWeightGrams}`)),
     }))
+    const businessDpdShippingTiers = defaultShopShippingTiers.map((tier) => ({
+      maxWeightGrams: tier.maxWeightGrams,
+      priceCents: parseEuroCents(form.get(`businessDpdShippingTier-${tier.maxWeightGrams}`)),
+    }))
+    const businessDpdMaxTraysText = String(form.get('businessDpdMaxTrays') || '').trim()
+    const businessDpdMaxTrays = /^\d+$/.test(businessDpdMaxTraysText) ? Number(businessDpdMaxTraysText) : null
     const shippingPricePerPalletCents = parseEuroCents(form.get('shippingPricePerPallet'))
     const shippingTraysPerPalletText = String(form.get('shippingTraysPerPallet') || '').trim()
     const shippingTraysPerPallet = /^\d+$/.test(shippingTraysPerPalletText) ? Number(shippingTraysPerPalletText) : null
     const largeCartonTareGrams = parseCartonGrams(form.get('largeCartonWeight'))
     const smallCartonTareGrams = parseCartonGrams(form.get('smallCartonWeight'))
     if (shippingTiers.some((tier) => tier.priceCents === null)
+      || businessDpdShippingTiers.some((tier) => tier.priceCents === null)
+      || !Number.isSafeInteger(businessDpdMaxTrays) || businessDpdMaxTrays < 1 || businessDpdMaxTrays > 20
       || shippingPricePerPalletCents === null
       || !Number.isSafeInteger(shippingTraysPerPallet) || shippingTraysPerPallet < 1 || shippingTraysPerPallet > 10000
       || largeCartonTareGrams === null || smallCartonTareGrams === null) {
@@ -3573,6 +3582,8 @@ function App() {
       ...previous,
       id: 'global',
       shippingTiers,
+      businessDpdShippingTiers,
+      businessDpdMaxTrays,
       shippingPricePerPalletCents,
       shippingTraysPerPallet,
       ...(largeCartonTareGrams === undefined ? {} : { largeCartonTareGrams }),
@@ -8450,11 +8461,18 @@ function App() {
                 <h2>Versandkosten</h2>
                 <span>Webshop</span>
               </div>
-              <p>Privatkunden zahlen DHL-Paketversand nach Gewicht. Freigegebene Geschäftskunden erhalten Speditionsversand zum Preis je Palette. Über 31,5 kg wird je angefangenem weiteren 31,5-kg-Paket gerechnet.</p>
+              <p>Privatkunden zahlen DHL-Paketversand nach Gewicht. Geschäftskunden erhalten bis zur eingestellten Traygrenze und maximal 31,5 kg DPD-Paketversand; darüber wird Spedition zum Preis je Palette berechnet. DPD-Tarife sind separat einstellbar. Als Ausgangswerte werden die vorhandenen Paketpreise verwendet. Überprüfe sie mit deinem DPD-Vertrag.</p>
               <form className="form-grid" onSubmit={saveShopShippingSettings}>
                 {defaultShopShippingTiers.map((tier) => {
                   const savedPrice = shopSettings.find((entry) => entry?.id === 'global')?.shippingTiers?.find((savedTier) => savedTier.maxWeightGrams === tier.maxWeightGrams)?.priceCents
                   return <label key={tier.maxWeightGrams}>{tier.label} (€)<input name={`shippingTier-${tier.maxWeightGrams}`} type="number" min="0" step="0.01" required defaultValue={((savedPrice ?? tier.priceCents) / 100).toFixed(2)} /></label>
+                })}
+                <label>DPD maximal 24er-Trays<input name="businessDpdMaxTrays" type="number" min="1" max="20" step="1" required defaultValue={shopSettings.find((entry) => entry?.id === 'global')?.businessDpdMaxTrays ?? defaultBusinessDpdMaxTrays} /></label>
+                {defaultShopShippingTiers.map((tier) => {
+                  const globalSettings = shopSettings.find((entry) => entry?.id === 'global')
+                  const dpdPrice = globalSettings?.businessDpdShippingTiers?.find((savedTier) => savedTier.maxWeightGrams === tier.maxWeightGrams)?.priceCents
+                  const packagePrice = globalSettings?.shippingTiers?.find((savedTier) => savedTier.maxWeightGrams === tier.maxWeightGrams)?.priceCents
+                  return <label key={`business-dpd-${tier.maxWeightGrams}`}>DPD Geschäftskunden bis {tier.label.match(/bis (.+)$/)?.[1] || `${tier.maxWeightGrams / 1000} kg`} (€)<input name={`businessDpdShippingTier-${tier.maxWeightGrams}`} type="number" min="0" step="0.01" required defaultValue={((dpdPrice ?? packagePrice ?? tier.priceCents) / 100).toFixed(2)} /></label>
                 })}
                 <label>Spedition je Palette (€)<input name="shippingPricePerPallet" type="number" min="0" step="0.01" required defaultValue={((shopSettings.find((entry) => entry?.id === 'global')?.shippingPricePerPalletCents ?? defaultShopShippingPricePerPalletCents) / 100).toFixed(2)} /></label>
                 <label>24er-Trays je Palette<input name="shippingTraysPerPallet" type="number" min="1" max="10000" step="1" required defaultValue={shopSettings.find((entry) => entry?.id === 'global')?.shippingTraysPerPallet ?? defaultShopShippingTraysPerPallet} /></label>

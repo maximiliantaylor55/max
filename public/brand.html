@@ -25,7 +25,7 @@
     <link rel="stylesheet" href="/brand-refresh.css?v=8" />
     <link rel="stylesheet" href="/shop-components.css?v=13" />
     <script src="/brand.js?v=20261105-email-link" defer></script>
-    <script type="module" src="/shop.js?v=32"></script>
+    <script type="module" src="/shop.js?v=34"></script>
     <script src="/shop-fx.js?v=3" defer></script>
   </head>
   <body>
@@ -53,7 +53,7 @@
         <div class="business-hero-copy">
           <p class="business-eyebrow"><span></span> ZYRO · B2B PORTAL</p>
           <h1 id="business-hero-title">ZYRO FÜR<br /><em>HANDEL &amp; GASTRO.</em></h1>
-          <p>Dein direkter Zugang zu vereinbarten Einkaufspreisen, planbaren Traymengen und Speditionsversand.</p>
+          <p>Dein direkter Zugang zu vereinbarten Traypreisen. Kleine Bestellungen kommen per DPD; ab der eingestellten Traymenge übernimmt die Spedition.</p>
           <div class="business-hero-actions">
             <a class="business-hero-primary" href="#sortiment">Zum Sortiment <span aria-hidden="true">↓</span></a>
             <button type="button" id="business-hero-account">Geschäftskundenkonto öffnen</button>
@@ -61,7 +61,7 @@
           <ul class="business-hero-facts" aria-label="Geschäftskunden-Vorteile">
             <li><strong>24</strong><span>Dosen pro Tray</span></li>
             <li><strong>01</strong><span>Individuelle Traypreise</span></li>
-            <li><strong>B2B</strong><span>Versand per Spedition</span></li>
+            <li><strong>DPD &amp; Spedition</strong><span id="business-hero-facts-spedition">Bis 2 Trays per DPD</span></li>
           </ul>
         </div>
         <div class="business-hero-product" aria-hidden="true">
@@ -166,7 +166,7 @@
         <div id="business-shop-banner" class="business-shop-banner" hidden>
           <p class="eyebrow">Freigeschalteter Händlerbereich</p>
           <h3>Geschäftskunden-Shop</h3>
-          <p>Bestelle bequem in 24er-Trays. Deine vereinbarten Traypreise und der Speditionsversand werden automatisch berechnet.</p>
+          <p>Bestelle bequem in 24er-Trays. Bis zur eingestellten Menge und 31,5 kg per DPD; größere Bestellungen werden automatisch auf Spedition umgestellt.</p>
         </div>
         <div id="product-grid" class="grid"></div>
       </section>

@@ -249,6 +249,64 @@ test('charges business customers 85 euros per started pallet of 64 trays', () =>
   assert.equal(privateParcel.shippingMethod, 'DHL Paket (bis 31,5 kg)')
 })
 
+test('uses DPD for business orders up to two trays and freight above that threshold', () => {
+  const catalog = new Map([
+    ['pfirsich-maracuja', { name: 'ZYRO Pfirsich Maracuja', cratePriceCents: 2400, unitWeightGrams: 500 }],
+  ])
+  const settings = {
+    largeCartonTareGrams: 500,
+    smallCartonTareGrams: 50,
+    businessDpdMaxTrays: 2,
+    businessDpdShippingTiers: [
+      { maxWeightGrams: 2000, priceCents: 699 },
+      { maxWeightGrams: 5000, priceCents: 899 },
+      { maxWeightGrams: 10000, priceCents: 1199 },
+      { maxWeightGrams: 20000, priceCents: 1999 },
+      { maxWeightGrams: 31500, priceCents: 2799 },
+    ],
+    shippingPricePerPalletCents: 8500,
+    shippingTraysPerPallet: 64,
+  }
+  const oneTray = calculateShipping([
+    { productId: 'pfirsich-maracuja', quantity: 24, largeCartonCount: 1, smallCartonCount: 0 },
+  ], catalog, settings, { businessCustomer: true })
+  const twoTrays = calculateShipping([
+    { productId: 'pfirsich-maracuja', quantity: 48, largeCartonCount: 2, smallCartonCount: 0 },
+  ], catalog, settings, { businessCustomer: true })
+  const threeTrays = calculateShipping([
+    { productId: 'pfirsich-maracuja', quantity: 72, largeCartonCount: 3, smallCartonCount: 0 },
+  ], catalog, settings, { businessCustomer: true })
+
+  assert.equal(oneTray.shippingMethod, 'DPD Paket (bis 31,5 kg)')
+  assert.equal(oneTray.shippingPriceCents, 1999)
+  assert.equal(oneTray.shippingPalletCount, 0)
+  assert.equal(twoTrays.shippingMethod, 'DPD Paket (bis 31,5 kg)')
+  assert.equal(twoTrays.shippingPriceCents, 2799)
+  assert.equal(threeTrays.shippingMethod, 'Spedition')
+  assert.equal(threeTrays.shippingPriceCents, 8500)
+  assert.equal(threeTrays.shippingPalletCount, 1)
+})
+
+test('uses freight for business orders over 31.5 kg even below the tray limit', () => {
+  const catalog = new Map([
+    ['heavy-product', { name: 'Schwerer Artikel', cratePriceCents: 2400, unitWeightGrams: 1400 }],
+  ])
+  const shipping = calculateShipping([
+    { productId: 'heavy-product', quantity: 24, largeCartonCount: 1, smallCartonCount: 0 },
+  ], catalog, {
+    largeCartonTareGrams: 500,
+    smallCartonTareGrams: 50,
+    businessDpdMaxTrays: 2,
+    businessDpdShippingTiers: [{ maxWeightGrams: 31500, priceCents: 2799 }],
+    shippingPricePerPalletCents: 8500,
+    shippingTraysPerPallet: 64,
+  }, { businessCustomer: true })
+
+  assert.equal(shipping.shippingWeightGrams, 34100)
+  assert.equal(shipping.shippingMethod, 'Spedition')
+  assert.equal(shipping.shippingPriceCents, 8500)
+})
+
 test('calculates trusted order totals with VAT included in prices', () => {
   const order = validatePublicOrder({ ...validOrder, items: [{ productId: 'pfirsich-maracuja', quantity: 25 }] }, new Map([
     ['pfirsich-maracuja', { name: 'ZYRO Pfirsich Maracuja', cratePriceCents: 2400, unitWeightGrams: 500, active: true }],
