@@ -35,6 +35,9 @@ a{color:inherit}
 .body h3{font:800 21px var(--display);margin:0}
 .body p{margin:0;color:var(--muted);font-size:14px}
 .price{font:800 24px var(--display)}
+.business-shop-banner{margin:18px 0;padding:20px 24px;border:1px solid rgba(23,45,40,.16);border-radius:20px;background:linear-gradient(120deg,rgba(215,243,106,.52),#fff 72%)}.business-shop-banner[hidden]{display:none}.business-shop-banner h3{margin:0 0 6px;font:800 24px var(--display)}.business-shop-banner p:last-child{margin:0;color:var(--muted)}
+.line input[type=number]{width:92px;min-width:0;padding:8px;border:1px solid var(--line);border-radius:9px;font:600 15px 'DM Sans'}
+.line button:not(.remove){border:1px solid var(--line);border-radius:9px;background:#fff;padding:6px 10px;cursor:pointer}
 .price small{font:500 13px 'DM Sans';color:var(--muted)}
 .tiers{display:flex;flex-wrap:wrap;gap:6px}
 .tiers span{background:rgba(215,243,106,.55);border-radius:8px;padding:3px 9px;font-size:12px;font-weight:700}

@@ -1,6 +1,6 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { applyBusinessPricing, cleanBusinessPrices, getCatalogBusinessPrices } = require('./business-pricing.cjs')
+const { applyBusinessPricing, cleanBusinessPrices, getCatalogBusinessPrices, normalizeBusinessTrayItems } = require('./business-pricing.cjs')
 
 const products = [
   { id: 'drink-a', cratePriceCents: 2856, tiers: [{ minQuantity: 48, percent: 10 }] },
@@ -27,4 +27,13 @@ test('allows an empty override list and validates ids and cent values', () => {
 
 test('ignores saved prices for products that are no longer in the shop catalog', () => {
   assert.deepEqual(getCatalogBusinessPrices(products, { 'drink-a': 2200, removed: 1500 }), { 'drink-a': 2200 })
+})
+
+test('normalizes business order quantities to full 24-can trays', () => {
+  assert.deepEqual(normalizeBusinessTrayItems([{ productId: 'zyro-original', trays: 3 }]), [
+    { productId: 'zyro-original', quantity: 72, trayCount: 3 },
+  ])
+  for (const trays of [0, -1, 1.5, 417, '2']) {
+    assert.throws(() => normalizeBusinessTrayItems([{ productId: 'zyro-original', trays }]))
+  }
 })

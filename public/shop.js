@@ -7,11 +7,14 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
   const formatDate = (date) => new Date(`${date}T00:00:00.000Z`).toLocaleDateString('de-DE', { timeZone: 'UTC' })
   const CART_KEY = 'zyro-shop-cart'
   const TOKEN_KEY = 'zyro-portal-token'
+  const BUSINESS_SHOP_URL = '/brand.html?bereich=geschaeftskunden'
+  const businessMode = new URLSearchParams(location.search).get('bereich') === 'geschaeftskunden'
   const gradients = ['#f47745,#ffb36b', '#642f48,#c57aa0', '#3d9a5b,#d7f36a', '#2b6cb0,#7fd0ff', '#b7791f,#f6e05e']
 
   let shop = { products: [], settings: {}, paymentMethods: [] }
   let cart = (() => { try { return JSON.parse(localStorage.getItem(CART_KEY)) || {} } catch { return {} } })()
   let appliedDiscount = null
+  let businessAccountStatus = ''
   let authMode = 'login'
   let passwordResetContext = null
   let accountReturnFocus = null
@@ -50,9 +53,15 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
   const saveCart = () => {
     localStorage.setItem(CART_KEY, JSON.stringify(cart))
     const count = Object.values(cart).reduce((sum, quantity) => sum + quantity, 0)
-    $('#cart-count').textContent = count
-    $('#cart-bar-count').textContent = count
-    $('#cart-bar').classList.toggle('show', count > 0)
+    const displayedCount = shop.businessPricing?.active
+      ? Object.values(cart).reduce((sum, quantity) => sum + Math.ceil(quantity / 24), 0)
+      : count
+    $('#cart-count').textContent = displayedCount
+    $('#cart-bar-count').textContent = displayedCount
+    const canAccessShop = !businessMode || shop.businessPricing?.active === true
+    show($('#open-cart'), canAccessShop)
+    show($('#cart-bar'), canAccessShop && count > 0)
+    $('#cart-bar').classList.toggle('show', canAccessShop && count > 0)
   }
   const productById = (id) => shop.products.find((product) => product.id === id)
 
@@ -60,7 +69,14 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     const product = productById(id)
     if (!product) return
     let next = Math.max(0, Math.min(9999, Math.floor(Number(quantity) || 0)))
-    if (Number.isSafeInteger(product.stock) && !(product.stock === 0 && product.preorderEnabled)) next = Math.min(next, product.stock)
+    if (shop.businessPricing?.active) {
+      if (Number.isSafeInteger(product.stock) && !(product.stock === 0 && product.preorderEnabled)) {
+        next = Math.min(next, Math.floor(product.stock / 24) * 24)
+      }
+      next = Math.floor(next / 24) * 24
+    } else if (Number.isSafeInteger(product.stock) && !(product.stock === 0 && product.preorderEnabled)) {
+      next = Math.min(next, product.stock)
+    }
     if (next === 0) delete cart[id]
     else cart[id] = next
     if (appliedDiscount) {
@@ -200,21 +216,37 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     if (product.ingredients) box.append(el('h4', 'detail-h', 'Zutaten'), el('p', 'detail-text', product.ingredients))
     appendNutrition(box, product)
     const facts = el('ul', 'detail-facts')
-    facts.append(el('li', '', `Preis: ${euro(Math.round(product.cratePriceCents / 24))} pro Dose · ${euro(product.cratePriceCents)} pro 24er-Tray`))
+    facts.append(el('li', '', shop.businessPricing?.active
+      ? `Geschäftskundenpreis: ${euro(product.cratePriceCents)} pro 24er-Tray`
+      : `Preis: ${euro(Math.round(product.cratePriceCents / 24))} pro Dose · ${euro(product.cratePriceCents)} pro 24er-Tray`))
     if (product.depositCents > 0) facts.append(el('li', '', `Pfand: ${euro(product.depositCents)} pro Dose, zzgl. und ohne MwSt.`))
-    product.tiers?.forEach((tier) => facts.append(el('li', '', `Ab ${doseLabel(tier.minQuantity)} −${tier.percent}% Mengenrabatt`)))
-    if (Number.isSafeInteger(product.stock)) facts.append(el('li', '', product.stock < 1
-      ? (product.preorderEnabled ? `Vorbestellung möglich${product.expectedDeliveryDate ? ` · voraussichtliche Lieferung ${formatDate(product.expectedDeliveryDate)}` : ''}` : 'Aktuell ausverkauft')
-      : `Auf Lager: ${doseLabel(product.stock)}`))
+    if (!shop.businessPricing?.active) {
+      product.tiers?.forEach((tier) => facts.append(el('li', '', `Ab ${doseLabel(tier.minQuantity)} −${tier.percent}% Mengenrabatt`)))
+    }
+    if (Number.isSafeInteger(product.stock)) {
+      const availableStock = shop.businessPricing?.active
+        ? `${Math.floor(product.stock / 24)} ${Math.floor(product.stock / 24) === 1 ? 'Tray' : 'Trays'} verfügbar`
+        : `Auf Lager: ${doseLabel(product.stock)}`
+      facts.append(el('li', '', product.stock < 1
+        ? (product.preorderEnabled ? `Vorbestellung möglich${product.expectedDeliveryDate ? ` · voraussichtliche Lieferung ${formatDate(product.expectedDeliveryDate)}` : ''}` : 'Aktuell ausverkauft')
+        : availableStock))
+    }
     box.append(facts)
     const preorder = product.stock === 0 && product.preorderEnabled
-    const add = el('button', 'primary', preorder ? '1 Dose vorbestellen' : '1 Dose in den Warenkorb')
+    const businessCustomer = shop.businessPricing?.active === true
+    const add = el('button', 'primary', businessCustomer ? '1 Tray in den Warenkorb' : preorder ? '1 Dose vorbestellen' : '1 Dose in den Warenkorb')
     add.type = 'button'
-    add.disabled = Number.isSafeInteger(product.stock) && product.stock < 1 && !preorder
+    const availableTrays = Number.isSafeInteger(product.stock) && !preorder
+      ? Math.floor(Math.max(0, product.stock - (Number(cart[product.id]) || 0)) / 24)
+      : 1
+    add.disabled = businessCustomer
+      ? availableTrays < 1
+      : Number.isSafeInteger(product.stock) && product.stock < 1 && !preorder
     add.addEventListener('click', () => {
-      setQuantity(product.id, (cart[product.id] || 0) + 1)
+      setQuantity(product.id, businessCustomer ? (cart[product.id] || 0) + 24 : (cart[product.id] || 0) + 1)
       openPanel('#cart-panel')
     })
+    if (businessCustomer) box.insertBefore(el('p', 'hint', `Geschäftskunden bestellen in vollen 24er-Trays · ${euro(product.cratePriceCents)} pro Tray`), box.querySelector('.detail-facts'))
     box.append(add)
     openPanel('#product-panel')
   }
@@ -222,6 +254,31 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
   const renderProducts = () => {
     const grid = $('#product-grid')
     grid.replaceChildren()
+    const businessCustomer = shop.businessPricing?.active === true
+    show($('#business-shop-banner'), businessCustomer && !businessMode)
+    if (businessMode) {
+      show($('#business-hero'))
+      show($('#business-access-gate'), !businessCustomer)
+      $('#business-shop-link').textContent = 'Privatkundenshop'
+      $('#business-shop-link').href = '/brand.html'
+      $('#header-contact').textContent = 'Zum B2B-Sortiment'
+      $('#shop-heading-kicker').textContent = 'Freigeschalteter Händlerbereich'
+      $('#shop-title').replaceChildren(document.createTextNode('Dein ZYRO Sortiment.'))
+      $('#shop-heading-description').textContent = 'Individuelle Geschäftskunden-Verkaufspreise pro 24er-Tray. Bestelle direkt und plane Lieferung sowie Palettenbedarf transparent.'
+      if (!businessCustomer) {
+        const signedIn = Boolean(sessionStorage.getItem(TOKEN_KEY))
+        $('#business-access-message').textContent = businessAccountStatus === 'pending'
+          ? 'Dein Geschäftskundenantrag wird geprüft. Sortiment und Preise werden nach der Freigabe sichtbar.'
+          : businessAccountStatus === 'suspended'
+            ? 'Der Zugang zu deinem Geschäftskundenkonto ist pausiert. Bitte wende dich an ZYRO.'
+            : businessAccountStatus === 'rejected'
+              ? 'Dein Antrag wurde nicht freigegeben. Du kannst dein Firmenprofil aktualisieren und erneut beantragen.'
+              : signedIn
+                ? 'Ergänze dein Firmenprofil und beantrage im Kundenkonto den Geschäftskundenstatus. Der Zugang wird nach manueller Prüfung freigeschaltet.'
+                : 'Melde dich mit einem freigeschalteten Geschäftskundenkonto an. Neue Firmenkunden können ein Konto erstellen und anschließend die Freischaltung beantragen.'
+        return
+      }
+    }
     shop.products.forEach((product, index) => {
       const card = el('article', 'card')
       const visual = el('div', 'visual')
@@ -239,13 +296,74 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
         visual.append(canNode(product.name))
       }
       if (Number.isSafeInteger(product.stock)) {
-        const out = product.stock < 1
-        visual.append(el('span', `badge${out || product.stock < 48 ? ' warn' : ''}`, out ? (product.preorderEnabled ? 'Vorbestellung' : 'Ausverkauft') : product.stock < 48 ? `Nur noch ${product.stock}` : 'Auf Lager'))
+        const businessTrays = Math.floor(product.stock / 24)
+        const out = businessCustomer ? businessTrays < 1 : product.stock < 1
+        const badgeText = out
+          ? (product.preorderEnabled ? 'Vorbestellung' : 'Ausverkauft')
+          : businessCustomer
+            ? `${businessTrays} ${businessTrays === 1 ? 'Tray' : 'Trays'} verfügbar`
+            : product.stock < 48 ? `Nur noch ${product.stock}` : 'Auf Lager'
+        visual.append(el('span', `badge${out || (!businessCustomer && product.stock < 48) ? ' warn' : ''}`, badgeText))
       }
       const body = el('div', 'body')
       body.append(el('h3', '', product.name))
       appendReviewSummary(body, product)
       if (product.description) body.append(el('p', 'card-desc', product.description))
+      if (businessCustomer) {
+        body.append(el('div', 'price', `${euro(product.cratePriceCents)} pro 24er-Tray`))
+        const quantityPicker = el('div', 'quantity-picker')
+        quantityPicker.append(el('span', 'quantity-picker-label', 'Bestellmenge in 24er-Trays'))
+        const maxTrays = Number.isSafeInteger(product.stock) && !(product.stock === 0 && product.preorderEnabled)
+          ? Math.floor(product.stock / 24)
+          : 416
+        const existingQuantity = Number(cart[product.id]) || 0
+        const trayInput = el('input')
+        trayInput.type = 'number'
+        trayInput.min = '1'
+        trayInput.max = String(Math.max(1, maxTrays))
+        trayInput.step = '1'
+        trayInput.value = existingQuantity > 0 && existingQuantity % 24 === 0
+          ? String(existingQuantity / 24)
+          : '1'
+        trayInput.setAttribute('aria-label', `Anzahl 24er-Trays ${product.name}`)
+        const summary = el('p', 'quantity-summary', `${Number(trayInput.value) * 24} Dosen · ${euro(product.cratePriceCents * Number(trayInput.value))}`)
+        trayInput.addEventListener('input', () => {
+          const trays = Math.max(1, Math.min(maxTrays, Math.floor(Number(trayInput.value) || 1)))
+          summary.textContent = `${trays * 24} Dosen · ${euro(product.cratePriceCents * trays)}`
+        })
+        const applyQuantity = el('button', 'primary', 'Menge übernehmen')
+        applyQuantity.type = 'button'
+        applyQuantity.disabled = maxTrays < 1
+        applyQuantity.addEventListener('click', () => {
+          const trays = Math.floor(Number(trayInput.value))
+          if (!Number.isSafeInteger(trays) || trays < 1 || trays > maxTrays) {
+            notice($('#shop-message'), `Bitte eine gültige Traymenge für ${product.name} eingeben.`)
+            return
+          }
+          setQuantity(product.id, trays * 24)
+          openPanel('#cart-panel')
+        })
+        const add = el('div', 'add')
+        add.append(trayInput, applyQuantity)
+        quantityPicker.append(summary)
+        body.append(quantityPicker, add, el('p', 'hint', 'Der Geschäftskunden-Warenkorb enthält ausschließlich volle 24er-Trays.'))
+        card.append(visual, body)
+        const openDetail = () => showProductDetail(product, index)
+        visual.classList.add('clickable')
+        visual.addEventListener('click', openDetail)
+        const title = body.querySelector('h3')
+        title.tabIndex = 0
+        title.setAttribute('role', 'button')
+        title.classList.add('clickable')
+        title.addEventListener('click', openDetail)
+        title.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openDetail() } })
+        const more = el('button', 'link', 'Details & Beschreibung')
+        more.type = 'button'
+        more.addEventListener('click', openDetail)
+        body.insertBefore(more, add)
+        grid.append(card)
+        return
+      }
       if (product.stock === 0 && product.preorderEnabled && product.expectedDeliveryDate) {
         body.append(el('p', 'hint', `Voraussichtliche Lieferung: ${formatDate(product.expectedDeliveryDate)}`))
       }
@@ -365,6 +483,10 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
   const renderDiscountProgress = (cartIds) => {
     const panel = $('#discount-progress')
     panel.replaceChildren()
+    if (shop.businessPricing?.active) {
+      show(panel, false)
+      return
+    }
 
     const target = getNextDiscountTarget(shop.products, cart)
 
@@ -412,6 +534,40 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
       const percent = tierPercent(product, quantity)
       const line = el('div', 'line')
       line.append(el('b', '', product.name))
+      const businessCustomer = shop.businessPricing?.active === true
+      if (businessCustomer) {
+        const exactTrays = quantity % 24 === 0
+        line.append(el('span', 'hint', exactTrays
+          ? `${quantity / 24} ${quantity / 24 === 1 ? '24er-Tray' : '24er-Trays'} · ${doseLabel(quantity)}`
+          : `${doseLabel(quantity)} · Bitte auf volle Trays ändern oder entfernen.`))
+        const trayInput = el('input')
+        const maxTrays = Number.isSafeInteger(product.stock) && !(product.stock === 0 && product.preorderEnabled)
+          ? Math.floor(product.stock / 24)
+          : 416
+        trayInput.type = 'number'
+        trayInput.min = '1'
+        trayInput.max = String(Math.max(1, maxTrays))
+        trayInput.step = '1'
+        trayInput.value = exactTrays ? String(quantity / 24) : ''
+        trayInput.placeholder = 'Trays'
+        trayInput.setAttribute('aria-label', `Anzahl 24er-Trays ${product.name}`)
+        const saveTrays = el('button', '', 'Übernehmen')
+        saveTrays.type = 'button'
+        saveTrays.addEventListener('click', () => {
+          const trays = Math.floor(Number(trayInput.value))
+          if (!Number.isSafeInteger(trays) || trays < 1 || trays > maxTrays) {
+            notice($('#checkout-message'), `Bitte eine gültige Traymenge für ${product.name} eingeben. Verfügbar: ${maxTrays} Trays.`)
+            return
+          }
+          setQuantity(id, trays * 24)
+        })
+        const remove = el('button', 'remove', 'Entfernen')
+        remove.type = 'button'
+        remove.addEventListener('click', () => setQuantity(id, 0))
+        line.append(trayInput, saveTrays, remove, el('span', 'sum', euro(lineCents(product, quantity))))
+        lines.append(line)
+        return
+      }
       if (product.stock === 0 && product.preorderEnabled) {
         line.append(el('small', 'hint', `Vorbestellung${product.expectedDeliveryDate ? ` · voraussichtliche Lieferung ${formatDate(product.expectedDeliveryDate)}` : ''}`))
       }
@@ -431,6 +587,8 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     const totals = $('#cart-totals')
     totals.replaceChildren()
     const empty = ids.length === 0
+    const invalidBusinessQuantity = shop.businessPricing?.active === true
+      && ids.some((id) => Number(cart[id]) % 24 !== 0)
     if (empty) lines.append(el('p', 'hint', 'Dein Warenkorb ist leer.'))
     renderDiscountProgress(ids)
     const { subtotal, shipping, deposit, shippingPalletCount, businessShipping } = cartTotals()
@@ -441,6 +599,7 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
       totals.append(wrapper)
     }
     if (!empty) {
+      if (invalidBusinessQuantity) lines.append(el('p', 'notice', 'Für Geschäftskunden sind nur volle 24er-Trays erlaubt. Bitte passe jede Menge an oder entferne den Artikel.'))
       row('Zwischensumme', euro(subtotal))
       if (discountCents > 0) row(`Rabattcode ${appliedDiscount.code}`, `−${euro(discountCents)}`)
       row(businessShipping
@@ -451,6 +610,8 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
       if (deposit > 0) row('Zahlbetrag inkl. Pfand', euro(subtotal - discountCents + shipping + deposit), 'grand')
     }
     show($('#to-checkout'), !empty && $('#checkout-form').hidden)
+    $('#to-checkout').disabled = invalidBusinessQuantity
+    if (invalidBusinessQuantity) show($('#checkout-form'), false)
     show($('#discount-form'), !empty && !shop.businessPricing?.active)
     if (empty) show($('#checkout-form'), false)
   }
@@ -563,7 +724,14 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
           businessPricingActive: shop.businessPricing?.active === true,
           businessPrices: shop.businessPricing?.prices || {},
           discountCode: appliedDiscount?.subtotalCents === cartTotals().subtotal ? appliedDiscount.code : '',
-          items: Object.entries(cart).map(([productId, quantity]) => ({ productId, quantity })),
+          items: shop.businessPricing?.active
+            ? Object.entries(cart).map(([productId, quantity]) => {
+              if (!Number.isSafeInteger(quantity) || quantity < 24 || quantity % 24 !== 0) {
+                throw new Error('Geschäftskunden können nur volle 24er-Trays bestellen. Bitte den Warenkorb korrigieren.')
+              }
+              return { productId, trays: quantity / 24 }
+            })
+            : Object.entries(cart).map(([productId, quantity]) => ({ productId, quantity })),
         }),
       })
       if (result.checkoutUrl) {
@@ -699,6 +867,7 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
 
   const loadProfile = async (token) => {
     const { profile, email, business = {} } = await api('/api/portal/profile', { headers: authHeaders(token) })
+    businessAccountStatus = business.status || ''
     const form = $('#profile-form')
     profileFieldNames.forEach((name) => { form.elements[name].value = profile[name] || '' })
     prefillCheckout(profile, email)
@@ -715,12 +884,15 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
             : 'Mit einem vollständigen Firmenprofil kannst du Geschäftskundenkonditionen beantragen. Der Antrag wird manuell geprüft.'
     $('#business-status').textContent = statusText
     show($('#apply-business'), !['approved', 'pending', 'suspended'].includes(status))
+    show($('#open-business-shop'), status === 'approved')
+    if (businessMode) renderProducts()
   }
 
   const refreshShopPricing = async (token) => {
     const { products, businessPricing } = await api('/api/shop', { headers: { Authorization: `Bearer ${token}` } })
     if (!Array.isArray(products)) throw new Error('Geschäftskundenpreise konnten nicht geladen werden.')
     shop = { ...shop, products, businessPricing: businessPricing || { active: false, prices: {} } }
+    saveCart()
     renderProducts()
     renderCart()
   }
@@ -735,8 +907,12 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     const registering = mode === 'register'
     $('#account-title').textContent = registering ? 'Konto erstellen' : 'Mein Konto'
     $('#auth-description').textContent = registering
-      ? 'Erstelle dein Konto mit E-Mail-Adresse und Passwort. Du erhältst einen Bestätigungslink per E-Mail.'
-      : 'Melde dich mit deiner E-Mail-Adresse und deinem Passwort an.'
+      ? businessMode
+        ? 'Erstelle dein Konto. Bestätige deine E-Mail, ergänze dein Firmenprofil und beantrage die Geschäftskunden-Freischaltung.'
+        : 'Erstelle dein Konto mit E-Mail-Adresse und Passwort. Du erhältst einen Bestätigungslink per E-Mail.'
+      : businessMode
+        ? 'Melde dich mit deinem freigeschalteten Geschäftskundenkonto an. Offene Anträge erhalten nach manueller Prüfung Zugang.'
+        : 'Melde dich mit deiner E-Mail-Adresse und deinem Passwort an.'
     $('#auth-submit').textContent = registering ? 'Konto erstellen' : 'Anmelden'
     $('#account-auth-form').elements.password.autocomplete = registering ? 'new-password' : 'current-password'
     show($('#account-auth-form'))
@@ -747,13 +923,27 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
 
   const setupPortal = () => {
     document.querySelectorAll('#portal .tab').forEach((tab) => tab.addEventListener('click', () => selectTab(tab.dataset.tab)))
-    $('#portal-logout').addEventListener('click', () => {
+    $('#portal-logout').addEventListener('click', async () => {
       sessionStorage.removeItem(TOKEN_KEY)
+      businessAccountStatus = ''
+      shop = { ...shop, products: [], businessPricing: { active: false, prices: {} } }
       $('#checkout-form').elements.email.readOnly = false
       $('#checkout-account').textContent = 'Mit Kundenkonto anmelden oder registrieren'
       show($('#portal'), false)
       setAuthMode('login')
       notice($('#account-message'), 'Du wurdest abgemeldet.', true)
+      saveCart()
+      renderProducts()
+      renderCart()
+      try {
+        const shopData = await api('/api/shop')
+        shop = { ...shop, ...shopData, businessPricing: { active: false, prices: {} } }
+        saveCart()
+        renderProducts()
+        renderCart()
+      } catch (error) {
+        notice($('#shop-message'), `Shop konnte nach dem Abmelden nicht aktualisiert werden: ${error.message}`)
+      }
     })
     $('#profile-form').addEventListener('submit', async (event) => {
       event.preventDefault()
@@ -763,6 +953,14 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
         await api('/api/portal/profile', { method: 'POST', headers: authHeaders(token), body: JSON.stringify({ profile: Object.fromEntries(profileFieldNames.map((name) => [name, data.get(name)])) }) })
         notice($('#profile-message'), 'Deine Daten wurden gespeichert.', true)
       } catch (error) { notice($('#profile-message'), error.message) }
+    })
+    $('#open-business-shop').addEventListener('click', () => {
+      closePanels()
+      if (!businessMode) {
+        location.href = BUSINESS_SHOP_URL
+        return
+      }
+      $('#sortiment').scrollIntoView({ behavior: 'smooth' })
     })
     $('#apply-business').addEventListener('click', async () => {
       const formData = new FormData($('#profile-form'))
@@ -794,6 +992,15 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
   }
 
   const init = async () => {
+    if (businessMode) {
+      document.body.classList.add('business-mode')
+      document.title = 'ZYRO® Geschäftskunden-Shop · Handel & Gastronomie'
+      show($('#business-hero'))
+      $('#business-shop-link').textContent = 'Privatkundenshop'
+      $('#business-shop-link').href = '/brand.html'
+      $('#header-contact').textContent = 'Zum B2B-Sortiment'
+      renderProducts()
+    }
     saveCart()
     try {
       const savedToken = sessionStorage.getItem(TOKEN_KEY)
@@ -831,6 +1038,8 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     $('#open-cart').addEventListener('click', () => openPanel('#cart-panel'))
     $('#cart-bar').addEventListener('click', () => openPanel('#cart-panel'))
     $('#open-account').addEventListener('click', (event) => openAccountPanel(event.currentTarget))
+    $('#business-access-account').addEventListener('click', (event) => openAccountPanel(event.currentTarget))
+    $('#business-hero-account').addEventListener('click', (event) => openAccountPanel(event.currentTarget))
     $('#checkout-account').addEventListener('click', (event) => {
       $('#account-auth-form').elements.email.value = $('#checkout-form').elements.email.value
       openAccountPanel(event.currentTarget)
@@ -898,7 +1107,9 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
           })
           setAuthMode('login')
           $('#account-auth-form').elements.email.value = email
-          notice($('#account-message'), 'Falls für diese E-Mail ein Konto angelegt werden kann, kommt der Bestätigungslink ins Postfach.', true)
+          notice($('#account-message'), businessMode
+            ? 'Falls für diese E-Mail ein Konto angelegt werden kann, kommt der Bestätigungslink ins Postfach. Bitte ergänze nach der Bestätigung dein Firmenprofil und beantrage die Freischaltung.'
+            : 'Falls für diese E-Mail ein Konto angelegt werden kann, kommt der Bestätigungslink ins Postfach.', true)
           return
         }
         const { accessToken } = await api('/api/portal/login', {

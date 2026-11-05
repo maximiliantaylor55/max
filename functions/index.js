@@ -10,7 +10,7 @@ const { buildOrderConfirmationEmail } = require('./email-templates.cjs')
 const { calculateOrderPricing } = require('./order-pricing.cjs')
 const { buildDesktopCatalog, slugify } = require('./shop-catalog.cjs')
 const { calculateDiscount, cleanDiscountCodes } = require('./shop-discounts.cjs')
-const { applyBusinessPricing, cleanBusinessPrices, getCatalogBusinessPrices } = require('./business-pricing.cjs')
+const { applyBusinessPricing, cleanBusinessPrices, getCatalogBusinessPrices, normalizeBusinessTrayItems } = require('./business-pricing.cjs')
 const { hashCustomerPassword, validateCustomerPassword, verifyCustomerPassword } = require('./customer-password.cjs')
 const {
   hashCustomerActionToken,
@@ -3705,8 +3705,21 @@ exports.submitPublicOrder = onRequest({
       ...(shop.payment.accountHolder && shop.payment.iban ? ['vorkasse'] : []),
       ...((await getStripeStatus()).enabled ? ['stripe'] : []),
     ]
-    const order = validatePublicOrder(request.body, catalog, availablePaymentMethods)
+    let orderInput = request.body
+    let businessTrayItems = []
     if (businessApproved) {
+      try {
+        businessTrayItems = normalizeBusinessTrayItems(request.body?.items)
+      } catch (error) {
+        return response.status(400).json({ error: error.message })
+      }
+      orderInput = { ...request.body, items: businessTrayItems }
+    }
+    const order = validatePublicOrder(orderInput, catalog, availablePaymentMethods)
+    if (businessApproved) {
+      order.items.forEach((item, index) => {
+        item.trayCount = businessTrayItems[index].trayCount
+      })
       order.company = String(customerProfile.company || order.company)
       order.name = String(customerProfile.name || order.name)
       order.phone = String(customerProfile.phone || '')

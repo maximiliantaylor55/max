@@ -8,6 +8,8 @@ Privatkunden zahlen DHL-Paketversand nach Gewicht. Freigegebene Geschäftskunden
 
 Im Bereich **Versand & Tracking** kann ein eigener A4-Lieferschein mit einem QR-Code zur Auftragsnummer gedruckt werden. DPD kann als Versanddienst und für manuelles Tracking ausgewählt werden. Ein echtes DPD-Frankierlabel wird erst unterstützt, wenn der DPD-Webservice-Zugang und die aktuelle WebConnect-Schnittstellenspezifikation vorliegen; das interne Versandetikett ist kein Portoetikett.
 
+Der Geschäftskunden-Shop ist über den Link **Geschäftskunden-Shop** im Seitenkopf oder direkt unter `/brand.html?bereich=geschaeftskunden` erreichbar. Sortiment, individuelle Verkaufspreise pro 24er-Tray und Warenkorb werden dort nur für angemeldete, manuell freigeschaltete Geschäftskunden angezeigt. Neue Firmenkunden können ein Konto erstellen, ihr Firmenprofil ergänzen und die Freischaltung beantragen. Im B2B-Shop werden Produkte ausschließlich in ganzen 24er-Trays bestellt; Mengen, Lagerbestand und Preise werden beim Absenden serverseitig geprüft. Traymengen gelten nur für den jeweiligen Einkauf und werden nicht im Profil gespeichert. Freigegebene Geschäftskunden können außerdem aus dem Kundenkonto im normalen Shop zu ihrer eigenen Shop-Ansicht wechseln.
+
 Die Desktop-App lokal starten:
 
 ```powershell

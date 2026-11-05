@@ -29,4 +29,17 @@ const applyBusinessPricing = (products, businessPrices = {}) => products.map((pr
   tiers: [],
 }))
 
-module.exports = { applyBusinessPricing, cleanBusinessPrices, getCatalogBusinessPrices }
+const normalizeBusinessTrayItems = (items) => {
+  if (!Array.isArray(items) || items.length < 1 || items.length > 50) {
+    throw new Error('Bitte gültige Geschäftskunden-Traymengen eingeben.')
+  }
+  return items.map((item) => {
+    const trays = item?.trays
+    if (typeof item?.productId !== 'string' || !Number.isSafeInteger(trays) || trays < 1 || trays > 416) {
+      throw new Error('Geschäftskunden bestellen bitte ganze 24er-Trays (maximal 416 je Artikel).')
+    }
+    return { productId: item.productId, quantity: trays * 24, trayCount: trays }
+  })
+}
+
+module.exports = { applyBusinessPricing, cleanBusinessPrices, getCatalogBusinessPrices, normalizeBusinessTrayItems }
