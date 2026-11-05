@@ -18,6 +18,9 @@ const trackingUrlFor = (tracking) => {
     url.searchParams.set('piececode', tracking.trackingNumber)
     return url.href
   }
+  if (tracking.carrier === 'DPD' && tracking.trackingNumber) {
+    return `https://tracking.dpd.de/status/de_DE/parcel/${encodeURIComponent(tracking.trackingNumber)}`
+  }
   return ''
 }
 

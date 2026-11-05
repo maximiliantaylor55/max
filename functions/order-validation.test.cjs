@@ -197,7 +197,7 @@ test('calculates shipping from bottle and carton weight, rounding up each starte
   assert.equal(shipping.shippingPriceCents, 3300)
 })
 
-test('uses DHL price tiers and charges another package above 31.5 kg', () => {
+test('uses DPD price tiers and charges another package above 31.5 kg', () => {
   const catalog = new Map([
     ['pfirsich-maracuja', { name: 'ZYRO Pfirsich Maracuja', cratePriceCents: 2400, unitWeightGrams: 500 }],
   ])
@@ -246,7 +246,7 @@ test('charges business customers 85 euros per started pallet of 64 trays', () =>
   assert.equal(twoPallets.shippingPalletCount, 2)
   assert.equal(twoPallets.shippingPriceCents, 17000)
   assert.equal(privateParcel.shippingPriceCents, 2399)
-  assert.equal(privateParcel.shippingMethod, 'DHL Paket (bis 31,5 kg)')
+  assert.equal(privateParcel.shippingMethod, 'DPD Paket (bis 31,5 kg)')
 })
 
 test('uses DPD for business orders up to two trays and freight above that threshold', () => {

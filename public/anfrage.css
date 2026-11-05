@@ -51,3 +51,29 @@ textarea:focus-visible {
   position: absolute;
   left: -9999px;
 }
+
+@media (max-width: 560px) {
+  .thread-entry {
+    max-width: 100%;
+  }
+
+  .admin-shell {
+    width: min(100% - 24px, 760px);
+    padding-top: max(18px, env(safe-area-inset-top));
+    padding-bottom: max(28px, env(safe-area-inset-bottom));
+  }
+
+  .admin-card {
+    padding: 22px 18px;
+  }
+
+  textarea,
+  button {
+    font-size: 16px;
+  }
+
+  .button-row .button {
+    width: 100%;
+    min-height: 48px;
+  }
+}

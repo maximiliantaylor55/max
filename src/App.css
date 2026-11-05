@@ -2513,6 +2513,7 @@ textarea {
   .zyro-app-shell {
     grid-template-columns: 1fr;
     grid-template-rows: auto auto;
+    align-content: start;
     height: auto;
     min-height: 100vh;
     min-height: 100dvh;
@@ -2528,15 +2529,22 @@ textarea {
   }
 
   .nav-menu {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: flex;
+    flex-direction: row;
+    min-width: 0;
+    overflow-x: auto;
     gap: 8px;
+    padding-bottom: 4px;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
   }
 
   .nav-button {
+    flex: 0 0 auto;
+    min-height: 44px;
     padding: 0.8rem 0.75rem;
     font-size: 0.85rem;
-    text-align: center;
+    white-space: nowrap;
   }
 
   .dashboard-grid,
@@ -2558,7 +2566,7 @@ textarea {
   }
 
   body {
-    min-width: 320px;
+    min-width: 0;
     -webkit-text-size-adjust: 100%;
   }
 
@@ -2697,10 +2705,6 @@ textarea {
     grid-template-columns: 1fr 1fr;
   }
 
-  .header-actions {
-    grid-template-columns: 1fr;
-  }
-
   .auth-header {
     gap: 10px;
   }
@@ -2717,6 +2721,110 @@ textarea {
 
   .mini-actions > * {
     flex: 1 1 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .zyro-app-shell:not(.scanner-standalone) {
+    min-width: 0;
+  }
+
+  .zyro-app-shell:not(.scanner-standalone) .sidebar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom-color: rgba(125, 211, 252, 0.2);
+    background: rgba(9, 18, 30, 0.98);
+    box-shadow: 0 8px 22px rgba(2, 8, 23, 0.24);
+  }
+
+  .zyro-app-shell:not(.scanner-standalone) .brand-block {
+    gap: 9px;
+    padding: 0 2px;
+    border: 0;
+  }
+
+  .zyro-app-shell:not(.scanner-standalone) .brand-mark {
+    flex: 0 0 36px;
+    width: 36px;
+    height: 36px;
+    border-radius: 11px;
+    font-size: 1.1rem;
+  }
+
+  .zyro-app-shell:not(.scanner-standalone) .user-box {
+    display: none;
+  }
+
+  .zyro-app-shell:not(.scanner-standalone) .nav-menu {
+    align-self: start;
+    width: 100%;
+    gap: 7px;
+    padding: 0 0 3px;
+    scrollbar-width: none;
+  }
+
+  .zyro-app-shell:not(.scanner-standalone) .nav-menu::-webkit-scrollbar {
+    display: none;
+  }
+
+  .zyro-app-shell:not(.scanner-standalone) .nav-button {
+    min-height: 42px;
+    padding: 0.65rem 0.8rem;
+    border-radius: 10px;
+    font-size: 0.82rem;
+  }
+
+  .main-panel {
+    min-width: 0;
+    padding-right: max(14px, env(safe-area-inset-right));
+    padding-bottom: max(30px, env(safe-area-inset-bottom));
+    padding-left: max(14px, env(safe-area-inset-left));
+  }
+
+  .main-header,
+  .panel-header {
+    min-width: 0;
+  }
+
+  .main-header h1 {
+    overflow-wrap: anywhere;
+  }
+
+  .main-panel input,
+  .main-panel select,
+  .main-panel textarea,
+  .auth-card input,
+  .auth-card select,
+  .auth-card textarea {
+    min-width: 0;
+    font-size: 16px;
+  }
+
+  .table-scroll {
+    max-width: 100%;
+    overscroll-behavior-x: contain;
+  }
+
+  .modal-backdrop {
+    align-items: start;
+    overflow-y: auto;
+    padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom));
+  }
+
+  .order-detail-modal,
+  .lab-report-modal,
+  .report-editor-modal,
+  .report-view-modal {
+    width: 100%;
+    max-height: calc(100dvh - 24px);
+    min-width: 0;
+    padding: 16px;
   }
 }
 

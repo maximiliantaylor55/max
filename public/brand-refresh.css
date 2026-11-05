@@ -306,3 +306,16 @@ body { background: var(--paper); color: var(--ink); }
 @media (max-width: 360px) {
   .hero-eyebrow { font-size: .62rem; letter-spacing: .08em; }
 }
+
+@media (max-width: 420px) {
+  .site-header { gap: 6px; padding-inline: 12px; }
+  .header-actions { gap: 5px; }
+  .header-business-link,
+  .header-cart { width: 38px; height: 38px; }
+  .menu-toggle { width: 40px; height: 40px; }
+  .shop-section { padding-inline: 16px; }
+  .business-hero { margin-inline: 8px; padding: 26px 18px 18px; }
+  .business-hero-actions { align-items: stretch; flex-direction: column; }
+  .business-hero-actions a,
+  .business-hero-actions button { width: 100%; }
+}

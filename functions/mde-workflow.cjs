@@ -60,7 +60,7 @@ const recordMdeScan = ({ document, products, barcode, actor }) => {
 const validateShipment = ({ document, carrier, carrierName, trackingNumber, trackingUrl }) => {
   if (!document || document.kind !== 'kundenauftrag') throw mdeError('Kundenauftrag wurde in der Cloud nicht gefunden.', 404)
   if (!['Verpackt', 'Versendet'].includes(document.status)) throw mdeError('Nur verpackte Aufträge können versendet werden.', 409)
-  if (!['DHL', 'Spedition'].includes(carrier)) throw mdeError('Bitte DHL oder Spedition als Versanddienst wählen.')
+  if (!['DPD', 'Spedition'].includes(carrier)) throw mdeError('Bitte DPD oder Spedition als Versanddienst wählen.')
   const normalizedTrackingNumber = String(trackingNumber || '').trim()
   const normalizedCarrierName = String(carrierName || '').trim()
   const normalizedTrackingUrl = String(trackingUrl || '').trim()
@@ -78,11 +78,11 @@ const validateShipment = ({ document, carrier, carrierName, trackingNumber, trac
     if (parsedUrl.protocol !== 'https:') throw mdeError('Tracking-Adressen müssen mit https:// beginnen.')
   }
   const shipmentChanged = document.carrier !== carrier
-    || document.carrierName !== (carrier === 'DHL' ? 'DHL' : normalizedCarrierName)
+    || document.carrierName !== (carrier === 'DPD' ? 'DPD' : normalizedCarrierName)
     || document.trackingNumber !== normalizedTrackingNumber
     || document.trackingUrl !== normalizedTrackingUrl
   document.carrier = carrier
-  document.carrierName = carrier === 'DHL' ? 'DHL' : normalizedCarrierName
+  document.carrierName = carrier === 'DPD' ? 'DPD' : normalizedCarrierName
   document.trackingNumber = normalizedTrackingNumber
   document.trackingUrl = normalizedTrackingUrl
   document.trackingToken ||= crypto.randomBytes(32).toString('hex')

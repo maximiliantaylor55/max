@@ -17,7 +17,7 @@
 }
 
 body {
-  min-width: 320px;
+  min-width: 0;
   min-height: 100vh;
   margin: 0;
   background:
@@ -288,7 +288,7 @@ input:focus-visible {
 
 @media (max-width: 560px) {
   .field-grid {
-    grid-template-columns: 1fr 110px;
+    grid-template-columns: minmax(0, 1fr) 100px;
   }
 
   .button-row {
@@ -297,5 +297,39 @@ input:focus-visible {
 
   .settings-heading {
     align-items: flex-start;
+  }
+
+  .admin-shell {
+    width: min(100% - 24px, 760px);
+    padding-top: max(18px, env(safe-area-inset-top));
+    padding-bottom: max(32px, env(safe-area-inset-bottom));
+  }
+
+  .admin-card {
+    padding: 22px 18px;
+  }
+
+  input:not([type="checkbox"]),
+  textarea,
+  button {
+    min-width: 0;
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 380px) {
+  .field-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 28px;
+  }
+
+  .admin-label {
+    font-size: 0.68rem;
   }
 }

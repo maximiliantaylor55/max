@@ -14,7 +14,7 @@ const buildOrderConfirmationEmail = ({ order, orderNumber, paymentInfo }) => {
   const actualWeightKg = (Number(order.shippingWeightGrams || 0) / 1000).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   const shippingDetails = order.shippingPalletCount
     ? `${order.shippingMethod || 'Spedition'} · ${order.shippingPalletCount} Palette(n)`
-    : `${order.shippingMethod || 'DHL Paket (bis 31,5 kg)'} · Versandgewicht: ${actualWeightKg} kg (berechnet: ${order.shippingBillableWeightKg} kg)`
+    : `${order.shippingMethod || 'DPD Paket (bis 31,5 kg)'} · Versandgewicht: ${actualWeightKg} kg (berechnet: ${order.shippingBillableWeightKg} kg)`
   const vat = formatCurrency(order.vatCents)
   const paymentLines = order.paymentMethod === 'vorkasse'
     ? [

@@ -31,4 +31,10 @@ h1{margin:0;font:800 clamp(34px,8vw,56px)/1.05 'Manrope',Arial,sans-serif;letter
 .submit-button:disabled{opacity:.65;cursor:wait}
 .privacy{margin:20px 2px 0;color:#68756e;font-size:12px}
 footer{padding:22px 4px;color:#68756e;font-size:12px;text-align:center}
-@media(max-width:520px){.review-shell{padding:14px}.review-card{border-radius:20px}.rating-options{gap:4px}.rating-options label{min-width:42px}}
+@media(max-width:520px){
+  .review-shell{width:100%;padding:max(14px,env(safe-area-inset-top)) max(14px,env(safe-area-inset-right)) max(18px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left))}
+  .review-card{padding:24px 18px;border-radius:20px}
+  .rating-options{gap:4px}
+  .rating-options label{flex:1;min-width:0;min-height:48px}
+  #review-product,#review-comment,.submit-button{font-size:16px}
+}

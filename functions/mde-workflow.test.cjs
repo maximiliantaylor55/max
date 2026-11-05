@@ -95,13 +95,19 @@ test('matches product-level EAN-13 values while preserving existing label EANs',
   assert.equal(recordMdeScan({ document: accepted, products: productsWithEans, barcode: '5901234123457', actor: { id: 'user-1' } }).product.id, 'product-2')
 })
 
-test('validates DHL and freight shipment tracking before marking an order shipped', () => {
-  const dhlOrder = { ...order, status: 'Verpackt' }
-  validateShipment({ document: dhlOrder, carrier: 'DHL', trackingNumber: '00340434123456789012' })
-  assert.equal(dhlOrder.status, 'Versendet')
-  assert.equal(dhlOrder.carrierName, 'DHL')
-  assert.match(dhlOrder.trackingToken, /^[a-f0-9]{64}$/)
-  assert.equal(dhlOrder.shipmentNotificationStatus, 'pending')
+test('validates DPD and freight shipments before marking an order shipped', () => {
+  const dpdOrder = { ...order, status: 'Verpackt' }
+  validateShipment({ document: dpdOrder, carrier: 'DPD', trackingNumber: '01234567890123' })
+  assert.equal(dpdOrder.status, 'Versendet')
+  assert.equal(dpdOrder.carrierName, 'DPD')
+  assert.match(dpdOrder.trackingToken, /^[a-f0-9]{64}$/)
+  assert.equal(dpdOrder.shipmentNotificationStatus, 'pending')
+
+  assert.throws(() => validateShipment({
+    document: { ...order, status: 'Verpackt' },
+    carrier: 'DHL',
+    trackingNumber: '00340434123456789012',
+  }), /Bitte DPD oder Spedition/)
 
   assert.throws(() => validateShipment({
     document: { ...order, status: 'Verpackt' },
@@ -126,15 +132,15 @@ test('returns only a shipped order summary to the holder of its unguessable trac
   }
   validateShipment({
     document: shippedOrder,
-    carrier: 'DHL',
-    trackingNumber: '00340434123456789012',
+    carrier: 'DPD',
+    trackingNumber: '01234567890123',
   })
   const result = getPublicShipment({ documents: [shippedOrder], token: shippedOrder.trackingToken })
   assert.deepEqual(result, {
     orderNumber: shippedOrder.number || shippedOrder.id,
     status: 'Versendet',
-    carrier: 'DHL',
-    trackingNumber: '00340434123456789012',
+    carrier: 'DPD',
+    trackingNumber: '01234567890123',
     trackingUrl: '',
     shippedAt: shippedOrder.shippedAt,
   })

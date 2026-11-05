@@ -102,13 +102,13 @@ const allowedRecipeIngredientCategories = [
 ]
 
 const paymentMethods = ['Vorkasse', 'Rechnung', 'Überweisung', 'Barzahlung', 'PayPal', 'Lastschrift', 'Sonstiges']
-const shippingMethods = ['DHL Paket (bis 31,5 kg)', 'DHL Spedition', 'Spedition', 'DPD Paket', 'GLS Paket', 'Selbstabholung', 'Sonstiges']
+const shippingMethods = ['DPD Paket', 'Spedition', 'Selbstabholung', 'Sonstiges']
 const defaultShopShippingTiers = [
-  { maxWeightGrams: 2000, label: 'DHL Paket bis 2 kg', priceCents: 619 },
-  { maxWeightGrams: 5000, label: 'DHL Paket bis 5 kg', priceCents: 769 },
-  { maxWeightGrams: 10000, label: 'DHL Paket bis 10 kg', priceCents: 1049 },
-  { maxWeightGrams: 20000, label: 'DHL Paket bis 20 kg', priceCents: 1899 },
-  { maxWeightGrams: 31500, label: 'DHL Paket bis 31,5 kg', priceCents: 2399 },
+  { maxWeightGrams: 2000, label: 'DPD Paket bis 2 kg', priceCents: 619 },
+  { maxWeightGrams: 5000, label: 'DPD Paket bis 5 kg', priceCents: 769 },
+  { maxWeightGrams: 10000, label: 'DPD Paket bis 10 kg', priceCents: 1049 },
+  { maxWeightGrams: 20000, label: 'DPD Paket bis 20 kg', priceCents: 1899 },
+  { maxWeightGrams: 31500, label: 'DPD Paket bis 31,5 kg', priceCents: 2399 },
 ]
 const defaultShopShippingPricePerPalletCents = 8500
 const defaultShopShippingTraysPerPallet = 64
@@ -434,7 +434,7 @@ const initialCustomerForm = {
   paymentMethod: '',
   notes: '',
 }
-const initialSalesDocumentForm = { kind: 'angebot', customerId: '', recipient: '', recipientEmail: '', recipientAddress: '', lotNumber: '', relatedOrderId: '', items: [{ productId: '', quantity: '1', unitPrice: '' }], vatRate: '19', documentDate: new Date().toISOString().slice(0, 10), dueDate: '', paymentMethod: 'Vorkasse', customPaymentMethod: '', shippingMethod: 'DHL Paket (bis 31,5 kg)', customShippingMethod: '', notes: '', status: 'Offen' }
+const initialSalesDocumentForm = { kind: 'angebot', customerId: '', recipient: '', recipientEmail: '', recipientAddress: '', lotNumber: '', relatedOrderId: '', items: [{ productId: '', quantity: '1', unitPrice: '' }], vatRate: '19', documentDate: new Date().toISOString().slice(0, 10), dueDate: '', paymentMethod: 'Vorkasse', customPaymentMethod: '', shippingMethod: 'DPD Paket', customShippingMethod: '', notes: '', status: 'Offen' }
 const createReportDraft = (userName = '') => ({
   title: '',
   type: 'Qualitätsbericht',
@@ -4816,7 +4816,7 @@ function App() {
       documentDate,
       dueDate,
       paymentMethod: 'Überweisung',
-      shippingMethod: 'DHL Paket',
+      shippingMethod: 'DPD Paket',
       responsibleName: currentUser?.name || 'ZYRO Team',
       notes: 'Dies ist eine unverbindliche Dokumentvorschau. Es wurde kein Beleg gespeichert oder versendet.',
       documentLayout: invoiceCompanyForm.documentLayout || 'zyro',
@@ -5187,7 +5187,7 @@ function App() {
   }
 
   const getShipmentDraft = (salesDocument) => mdeShipmentDrafts[salesDocument.id] || {
-      carrier: salesDocument.carrier || 'DHL',
+      carrier: salesDocument.carrier === 'Spedition' ? 'Spedition' : 'DPD',
       carrierName: salesDocument.carrierName || '',
       trackingNumber: salesDocument.trackingNumber || '',
       trackingUrl: salesDocument.trackingUrl || '',
@@ -5225,8 +5225,8 @@ function App() {
 
   const getShipmentTrackingUrl = (salesDocument) => {
       if (salesDocument.trackingUrl) return salesDocument.trackingUrl
-      if (salesDocument.carrier === 'DHL' && salesDocument.trackingNumber) {
-        return `https://www.dhl.de/de/privatkunden/dhl-sendungsverfolgung.html?piececode=${encodeURIComponent(salesDocument.trackingNumber)}`
+      if (salesDocument.carrier === 'DPD' && salesDocument.trackingNumber) {
+        return `https://tracking.dpd.de/status/de_DE/parcel/${encodeURIComponent(salesDocument.trackingNumber)}`
       }
       return ''
     }
@@ -8461,7 +8461,7 @@ function App() {
                 <h2>Versandkosten</h2>
                 <span>Webshop</span>
               </div>
-              <p>Privatkunden zahlen DHL-Paketversand nach Gewicht. Geschäftskunden erhalten bis zur eingestellten Traygrenze und maximal 31,5 kg DPD-Paketversand; darüber wird Spedition zum Preis je Palette berechnet. DPD-Tarife sind separat einstellbar. Als Ausgangswerte werden die vorhandenen Paketpreise verwendet. Überprüfe sie mit deinem DPD-Vertrag.</p>
+              <p>Privat- und Geschäftskunden erhalten bis zur eingestellten Traygrenze und maximal 31,5 kg DPD-Paketversand; bei schwereren Geschäftskundenbestellungen wird Spedition zum Preis je Palette berechnet. DPD-Tarife sind separat einstellbar. Die bisherigen Paketpreise dienen als Ausgangswerte und müssen mit deinem DPD-Vertrag abgeglichen werden.</p>
               <form className="form-grid" onSubmit={saveShopShippingSettings}>
                 {defaultShopShippingTiers.map((tier) => {
                   const savedPrice = shopSettings.find((entry) => entry?.id === 'global')?.shippingTiers?.find((savedTier) => savedTier.maxWeightGrams === tier.maxWeightGrams)?.priceCents
@@ -9864,7 +9864,7 @@ function App() {
               <div>
                 <p className="eyebrow">Versandzentrale</p>
                 <h2>Pakete, Etiketten &amp; Sendungsverfolgung</h2>
-                <p className="meta">Versanddaten werden in der Cloud gespeichert und mit dem Kundenauftrag synchronisiert.</p>
+                <p className="meta">Versanddaten werden in der Cloud gespeichert und mit dem Kundenauftrag synchronisiert. DPD und Spedition sind verfügbar; für echte frankierte DPD-Labels muss der DPD-Webservice-Zugang eingerichtet sein. Bis dahin druckt die App interne Adressetiketten ohne Porto.</p>
               </div>
             </div>
             {salesDocuments.filter((document) =>
@@ -9897,11 +9897,11 @@ function App() {
                               printMdeShippingLabel(labelWindow, salesDocument, {
                                 ...salesDocument,
                                 ...draft,
-                                carrierName: draft.carrier === 'DHL' ? 'DHL' : draft.carrierName,
+                                carrierName: draft.carrier === 'DPD' ? 'DPD' : draft.carrierName,
                               })
                             }}
                           >
-                            Versandetikett drucken
+                            Internes Versandetikett drucken
                           </button>
                           <button
                             type="button"
@@ -9922,7 +9922,7 @@ function App() {
                               return sum + (Number(item.quantity) || 0) * (Number(product?.weightKg) || 0)
                             }, 0)
                             if (weight <= 0) return null
-                            return <span><strong>Gewicht ca. {weight.toLocaleString('de-DE', { maximumFractionDigits: 1 })} kg</strong> · Empfehlung: {weight <= 31.5 ? 'DHL Paket' : 'Spedition / mehrere Pakete (über 31,5 kg)'}</span>
+                            return <span><strong>Gewicht ca. {weight.toLocaleString('de-DE', { maximumFractionDigits: 1 })} kg</strong> · Empfehlung: {weight <= 31.5 ? 'DPD Paket' : 'Spedition / mehrere Pakete (über 31,5 kg)'}</span>
                           })()}
                         </div>
                         {salesDocument.status === 'Verpackt' ? (
@@ -9930,7 +9930,6 @@ function App() {
                             <label>
                               Versanddienst
                               <select value={draft.carrier} onChange={(event) => shipmentActions.updateDraft(salesDocument, 'carrier', event.target.value)}>
-                                <option value="DHL">DHL</option>
                                 <option value="DPD">DPD</option>
                                 <option value="Spedition">Spedition</option>
                               </select>

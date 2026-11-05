@@ -1,7 +1,7 @@
 {
   "name": "zyro-programm",
   "private": true,
-  "version": "1.1.31",
+  "version": "1.1.32",
   "description": "Lokale Desktop-Anwendung für Getränkeproduktion und Verkaufsbelege",
   "author": "Liberty Street Food GmbH",
   "type": "module",

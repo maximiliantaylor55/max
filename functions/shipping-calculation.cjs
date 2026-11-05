@@ -18,7 +18,7 @@ const calculateShipping = (items, catalog, settings, { businessCustomer = false 
 
   let shippingPriceCents
   let shippingPalletCount = 0
-  let shippingMethod = 'DHL Paket (bis 31,5 kg)'
+  let shippingMethod = 'DPD Paket (bis 31,5 kg)'
   if (businessCustomer) {
     const trayCount = items.reduce((total, item) => total + Math.ceil(item.quantity / 24), 0)
     const businessDpdMaxTrays = Number(settings.businessDpdMaxTrays ?? 2)

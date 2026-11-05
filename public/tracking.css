@@ -12,7 +12,7 @@
 }
 
 body {
-  min-width: 320px;
+  min-width: 0;
   min-height: 100vh;
   margin: 0;
   background:
@@ -23,7 +23,7 @@ body {
 .tracking-shell {
   width: min(100% - 32px, 720px);
   margin: 0 auto;
-  padding: 44px 0 28px;
+  padding: max(28px, env(safe-area-inset-top)) 0 max(28px, env(safe-area-inset-bottom));
 }
 
 .brand {
@@ -225,15 +225,28 @@ footer {
 
 @media (max-width: 520px) {
   .tracking-shell {
-    padding-top: 28px;
+    width: min(100% - 24px, 720px);
   }
 
   .tracking-card {
-    margin-top: 24px;
+    margin-top: 20px;
+    padding: 20px 16px;
   }
 
   .token-row {
     flex-direction: column;
+  }
+
+  .token-row input,
+  .token-row button,
+  .track-button {
+    width: 100%;
+    min-height: 48px;
+    font-size: 16px;
+  }
+
+  .tracking-result {
+    padding: 16px 12px;
   }
 
   dl div {

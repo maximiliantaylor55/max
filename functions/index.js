@@ -489,7 +489,7 @@ const syncOrderToDesktop = async (orderId, order, paymentStatus) => {
         paymentMethod: order.paymentMethod === 'stripe' ? 'Online (Stripe)' : 'Vorkasse',
         paymentStatus: paid ? 'paid' : 'pending',
         hasPreorderItems: order.hasPreorderItems === true,
-        shippingMethod: 'DHL Paket (bis 31,5 kg)',
+        shippingMethod: 'DPD Paket (bis 31,5 kg)',
         responsibleName: 'Webshop',
         vatRate,
         documentDate,
@@ -499,7 +499,7 @@ const syncOrderToDesktop = async (orderId, order, paymentStatus) => {
           ...items.filter((item) => item.isPreorder).map((item) => `${item.productName}: VORBESTELLUNG${item.expectedDeliveryDate ? ` · voraussichtliche Lieferung ${new Date(`${item.expectedDeliveryDate}T00:00:00.000Z`).toLocaleDateString('de-DE', { timeZone: 'UTC' })}` : ''}`),
           order.discountCents > 0 ? `Rabattcode ${order.discountCode}: −${(order.discountCents / 100).toFixed(2).replace('.', ',')} €` : '',
           order.businessPricingApplied ? 'Vereinbarte Geschäftskunden-Verkaufspreise angewendet' : '',
-          `Versand: ${(order.shippingPriceCents / 100).toFixed(2).replace('.', ',')} € (${order.shippingMethod || 'DHL Paket (bis 31,5 kg)'}${order.shippingPalletCount ? ` · ${order.shippingPalletCount} Palette(n)` : ` · ${order.shippingBillableWeightKg} kg`})`,
+          `Versand: ${(order.shippingPriceCents / 100).toFixed(2).replace('.', ',')} € (${order.shippingMethod || 'DPD Paket (bis 31,5 kg)'}${order.shippingPalletCount ? ` · ${order.shippingPalletCount} Palette(n)` : ` · ${order.shippingBillableWeightKg} kg`})`,
           order.note ? `Kundenhinweis: ${order.note}` : '',
         ].filter(Boolean).join('\n'),
         websiteInvoiceTotals: { netTotal, taxTotal: order.vatCents / 100, grossTotal: (order.totalPriceCents - depositCents) / 100 },
@@ -2634,7 +2634,9 @@ const sendShippedOrderNotification = async (orderId) => {
   const externalTrackingLink = document.trackingUrl
     || (document.carrier === 'DHL'
       ? `https://www.dhl.de/de/privatkunden/dhl-sendungsverfolgung.html?piececode=${encodeURIComponent(document.trackingNumber)}`
-      : '')
+      : document.carrier === 'DPD'
+        ? `https://tracking.dpd.de/status/de_DE/parcel/${encodeURIComponent(document.trackingNumber)}`
+        : '')
   const escapedOrderNumber = escapeEmailHtml(orderNumber)
   const escapedCarrier = escapeEmailHtml(document.carrierName || document.carrier)
   const escapedTrackingNumber = escapeEmailHtml(document.trackingNumber)
