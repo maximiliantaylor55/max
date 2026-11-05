@@ -249,14 +249,14 @@ test('charges business customers 85 euros per started pallet of 64 trays', () =>
   assert.equal(privateParcel.shippingMethod, 'DPD Paket (bis 31,5 kg)')
 })
 
-test('uses DPD for business orders up to two trays and freight above that threshold', () => {
+test('splits business orders of up to six trays into DPD parcels and uses freight above that threshold', () => {
   const catalog = new Map([
     ['pfirsich-maracuja', { name: 'ZYRO Pfirsich Maracuja', cratePriceCents: 2400, unitWeightGrams: 500 }],
   ])
   const settings = {
     largeCartonTareGrams: 500,
     smallCartonTareGrams: 50,
-    businessDpdMaxTrays: 2,
+    businessDpdMaxTrays: 6,
     businessDpdShippingTiers: [
       { maxWeightGrams: 2000, priceCents: 699 },
       { maxWeightGrams: 5000, priceCents: 899 },
@@ -276,15 +276,27 @@ test('uses DPD for business orders up to two trays and freight above that thresh
   const threeTrays = calculateShipping([
     { productId: 'pfirsich-maracuja', quantity: 72, largeCartonCount: 3, smallCartonCount: 0 },
   ], catalog, settings, { businessCustomer: true })
+  const sixTrays = calculateShipping([
+    { productId: 'pfirsich-maracuja', quantity: 144, largeCartonCount: 6, smallCartonCount: 0 },
+  ], catalog, settings, { businessCustomer: true })
+  const sevenTrays = calculateShipping([
+    { productId: 'pfirsich-maracuja', quantity: 168, largeCartonCount: 7, smallCartonCount: 0 },
+  ], catalog, settings, { businessCustomer: true })
 
-  assert.equal(oneTray.shippingMethod, 'DPD Paket (bis 31,5 kg)')
+  assert.equal(oneTray.shippingMethod, 'DPD Paket (1 Paket bis 31,5 kg je Paket)')
   assert.equal(oneTray.shippingPriceCents, 1999)
   assert.equal(oneTray.shippingPalletCount, 0)
-  assert.equal(twoTrays.shippingMethod, 'DPD Paket (bis 31,5 kg)')
+  assert.equal(twoTrays.shippingMethod, 'DPD Paket (1 Paket bis 31,5 kg je Paket)')
   assert.equal(twoTrays.shippingPriceCents, 2799)
-  assert.equal(threeTrays.shippingMethod, 'Spedition')
-  assert.equal(threeTrays.shippingPriceCents, 8500)
-  assert.equal(threeTrays.shippingPalletCount, 1)
+  assert.equal(threeTrays.shippingMethod, 'DPD Paket (2 Pakete bis 31,5 kg je Paket)')
+  assert.equal(threeTrays.shippingPriceCents, 4798)
+  assert.equal(threeTrays.shippingParcelCount, 2)
+  assert.equal(sixTrays.shippingMethod, 'DPD Paket (3 Pakete bis 31,5 kg je Paket)')
+  assert.equal(sixTrays.shippingPriceCents, 8397)
+  assert.equal(sixTrays.shippingParcelCount, 3)
+  assert.equal(sevenTrays.shippingMethod, 'Spedition')
+  assert.equal(sevenTrays.shippingPriceCents, 8500)
+  assert.equal(sevenTrays.shippingPalletCount, 1)
 })
 
 test('uses freight for business orders over 31.5 kg even below the tray limit', () => {
@@ -296,7 +308,7 @@ test('uses freight for business orders over 31.5 kg even below the tray limit', 
   ], catalog, {
     largeCartonTareGrams: 500,
     smallCartonTareGrams: 50,
-    businessDpdMaxTrays: 2,
+    businessDpdMaxTrays: 6,
     businessDpdShippingTiers: [{ maxWeightGrams: 31500, priceCents: 2799 }],
     shippingPricePerPalletCents: 8500,
     shippingTraysPerPallet: 64,

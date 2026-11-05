@@ -112,7 +112,7 @@ const defaultShopShippingTiers = [
 ]
 const defaultShopShippingPricePerPalletCents = 8500
 const defaultShopShippingTraysPerPallet = 64
-const defaultBusinessDpdMaxTrays = 2
+const defaultBusinessDpdMaxTrays = 6
 
 const salesDocumentStatuses = {
   angebot: ['Offen', 'Angenommen', 'Abgelehnt', 'Abgelaufen'],
@@ -3570,7 +3570,7 @@ function App() {
     const smallCartonTareGrams = parseCartonGrams(form.get('smallCartonWeight'))
     if (shippingTiers.some((tier) => tier.priceCents === null)
       || businessDpdShippingTiers.some((tier) => tier.priceCents === null)
-      || !Number.isSafeInteger(businessDpdMaxTrays) || businessDpdMaxTrays < 1 || businessDpdMaxTrays > 20
+      || !Number.isSafeInteger(businessDpdMaxTrays) || businessDpdMaxTrays < 1 || businessDpdMaxTrays > 6
       || shippingPricePerPalletCents === null
       || !Number.isSafeInteger(shippingTraysPerPallet) || shippingTraysPerPallet < 1 || shippingTraysPerPallet > 10000
       || largeCartonTareGrams === null || smallCartonTareGrams === null) {
@@ -8461,13 +8461,13 @@ function App() {
                 <h2>Versandkosten</h2>
                 <span>Webshop</span>
               </div>
-              <p>Privat- und Geschäftskunden erhalten bis zur eingestellten Traygrenze und maximal 31,5 kg DPD-Paketversand; bei schwereren Geschäftskundenbestellungen wird Spedition zum Preis je Palette berechnet. DPD-Tarife sind separat einstellbar. Die bisherigen Paketpreise dienen als Ausgangswerte und müssen mit deinem DPD-Vertrag abgeglichen werden.</p>
+              <p>Geschäftskunden können bis zu 6 24er-Trays per DPD bestellen, aufgeteilt auf höchstens 3 Pakete mit maximal 2 Trays und 31,5 kg je Paket. Größere oder nicht paketfähige Bestellungen werden per Spedition versendet. DPD-Tarife werden je Paket berechnet und sind separat einstellbar. Die bisherigen Paketpreise dienen als Ausgangswerte und müssen mit deinem DPD-Vertrag abgeglichen werden.</p>
               <form className="form-grid" onSubmit={saveShopShippingSettings}>
                 {defaultShopShippingTiers.map((tier) => {
                   const savedPrice = shopSettings.find((entry) => entry?.id === 'global')?.shippingTiers?.find((savedTier) => savedTier.maxWeightGrams === tier.maxWeightGrams)?.priceCents
                   return <label key={tier.maxWeightGrams}>{tier.label} (€)<input name={`shippingTier-${tier.maxWeightGrams}`} type="number" min="0" step="0.01" required defaultValue={((savedPrice ?? tier.priceCents) / 100).toFixed(2)} /></label>
                 })}
-                <label>DPD maximal 24er-Trays<input name="businessDpdMaxTrays" type="number" min="1" max="20" step="1" required defaultValue={shopSettings.find((entry) => entry?.id === 'global')?.businessDpdMaxTrays ?? defaultBusinessDpdMaxTrays} /></label>
+                <label>DPD maximal 24er-Trays (max. 6)<input name="businessDpdMaxTrays" type="number" min="1" max="6" step="1" required defaultValue={Math.min(defaultBusinessDpdMaxTrays, Number(shopSettings.find((entry) => entry?.id === 'global')?.businessDpdMaxTrays) === 2 ? defaultBusinessDpdMaxTrays : shopSettings.find((entry) => entry?.id === 'global')?.businessDpdMaxTrays ?? defaultBusinessDpdMaxTrays)} /></label>
                 {defaultShopShippingTiers.map((tier) => {
                   const globalSettings = shopSettings.find((entry) => entry?.id === 'global')
                   const dpdPrice = globalSettings?.businessDpdShippingTiers?.find((savedTier) => savedTier.maxWeightGrams === tier.maxWeightGrams)?.priceCents

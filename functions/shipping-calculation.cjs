@@ -1,3 +1,30 @@
+const packBusinessDpdTrays = (trayWeights, parcelCount) => {
+  const parcelWeights = Array(parcelCount).fill(0)
+  const parcelTrayCounts = Array(parcelCount).fill(0)
+  const sortedWeights = [...trayWeights].sort((a, b) => b - a)
+
+  const placeTray = (trayIndex) => {
+    if (trayIndex === sortedWeights.length) return true
+    const trayWeight = sortedWeights[trayIndex]
+    const seenParcels = new Set()
+    for (let parcelIndex = 0; parcelIndex < parcelCount; parcelIndex += 1) {
+      const currentWeight = parcelWeights[parcelIndex]
+      const currentTrayCount = parcelTrayCounts[parcelIndex]
+      const parcelKey = `${currentWeight}:${currentTrayCount}`
+      if (seenParcels.has(parcelKey) || currentTrayCount >= 2 || currentWeight + trayWeight > 31500) continue
+      seenParcels.add(parcelKey)
+      parcelWeights[parcelIndex] += trayWeight
+      parcelTrayCounts[parcelIndex] += 1
+      if (placeTray(trayIndex + 1)) return true
+      parcelWeights[parcelIndex] -= trayWeight
+      parcelTrayCounts[parcelIndex] -= 1
+    }
+    return false
+  }
+
+  return placeTray(0) ? parcelWeights : null
+}
+
 const calculateShipping = (items, catalog, settings, { businessCustomer = false } = {}) => {
   const largeCartonTareGrams = Number(settings.largeCartonTareGrams)
   const smallCartonTareGrams = Number(settings.smallCartonTareGrams)
@@ -18,24 +45,38 @@ const calculateShipping = (items, catalog, settings, { businessCustomer = false 
 
   let shippingPriceCents
   let shippingPalletCount = 0
+  let shippingParcelCount = 0
   let shippingMethod = 'DPD Paket (bis 31,5 kg)'
   if (businessCustomer) {
     const trayCount = items.reduce((total, item) => total + Math.ceil(item.quantity / 24), 0)
-    const businessDpdMaxTrays = Number(settings.businessDpdMaxTrays ?? 2)
-    if (!Number.isSafeInteger(businessDpdMaxTrays) || businessDpdMaxTrays < 1 || businessDpdMaxTrays > 20) {
+    const businessDpdMaxTrays = Number(settings.businessDpdMaxTrays ?? 6)
+    if (!Number.isSafeInteger(businessDpdMaxTrays) || businessDpdMaxTrays < 1 || businessDpdMaxTrays > 6) {
       throw new Error('DPD-Traygrenze ist im Shop-Admin nicht korrekt eingerichtet.')
     }
-    if (trayCount <= businessDpdMaxTrays && shippingWeightGrams <= 31500) {
+    const trayWeights = items.flatMap((item) => {
+      const product = catalog.get(item.productId)
+      const trayWeightGrams = Number(product.unitWeightGrams) * 24 + largeCartonTareGrams
+      return Array.from({ length: item.largeCartonCount }, () => trayWeightGrams)
+    })
+    const parcelCount = Math.ceil(trayCount / 2)
+    const parcelWeights = trayCount <= businessDpdMaxTrays && trayWeights.length === trayCount
+      ? packBusinessDpdTrays(trayWeights, parcelCount)
+      : null
+    if (parcelWeights) {
       const dpdTiers = Array.isArray(settings.businessDpdShippingTiers) && settings.businessDpdShippingTiers.length
         ? settings.businessDpdShippingTiers
         : settings.shippingTiers
       if (!Array.isArray(dpdTiers) || dpdTiers.length === 0) {
         throw new Error('DPD-Versandpreise sind im Shop-Admin nicht korrekt eingerichtet.')
       }
-      const tier = dpdTiers.find((entry) => shippingWeightGrams <= entry.maxWeightGrams)
-      if (!tier) throw new Error('Für das Bestellgewicht ist kein gültiger DPD-Tarif eingerichtet.')
-      shippingPriceCents = Number(tier.priceCents)
-      shippingMethod = 'DPD Paket (bis 31,5 kg)'
+      shippingPriceCents = parcelWeights.reduce((total, parcelWeightGrams) => {
+        const tier = dpdTiers.find((entry) => parcelWeightGrams <= entry.maxWeightGrams)
+        if (!tier) throw new Error('Für das Paketgewicht ist kein gültiger DPD-Tarif eingerichtet.')
+        return total + Number(tier.priceCents)
+      }, 0)
+      shippingParcelCount = parcelWeights.length
+      const parcelLabel = shippingParcelCount === 1 ? 'Paket' : 'Pakete'
+      shippingMethod = `DPD Paket (${shippingParcelCount} ${parcelLabel} bis 31,5 kg je Paket)`
     } else {
       const shippingPricePerPalletCents = Number(settings.shippingPricePerPalletCents)
       const shippingTraysPerPallet = Number(settings.shippingTraysPerPallet)
@@ -67,6 +108,7 @@ const calculateShipping = (items, catalog, settings, { businessCustomer = false 
     shippingBillableWeightKg: Math.ceil(shippingWeightGrams / 1000),
     shippingPriceCents,
     shippingPalletCount,
+    shippingParcelCount,
     shippingMethod,
   }
 }

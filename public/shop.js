@@ -49,6 +49,33 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     return Math.floor(quantity / 24) * price + Math.round((quantity % 24) * price / 24)
   }
   const doseLabel = (quantity) => `${quantity} ${quantity === 1 ? 'Dose' : 'Dosen'}`
+  const getBusinessDpdParcelWeights = (trayWeights) => {
+    const parcelCount = Math.ceil(trayWeights.length / 2)
+    const parcelWeights = Array(parcelCount).fill(0)
+    const parcelTrayCounts = Array(parcelCount).fill(0)
+    const sortedWeights = [...trayWeights].sort((a, b) => b - a)
+
+    const placeTray = (trayIndex) => {
+      if (trayIndex === sortedWeights.length) return true
+      const trayWeight = sortedWeights[trayIndex]
+      const seenParcels = new Set()
+      for (let parcelIndex = 0; parcelIndex < parcelCount; parcelIndex += 1) {
+        const currentWeight = parcelWeights[parcelIndex]
+        const currentTrayCount = parcelTrayCounts[parcelIndex]
+        const parcelKey = `${currentWeight}:${currentTrayCount}`
+        if (seenParcels.has(parcelKey) || currentTrayCount >= 2 || currentWeight + trayWeight > 31500) continue
+        seenParcels.add(parcelKey)
+        parcelWeights[parcelIndex] += trayWeight
+        parcelTrayCounts[parcelIndex] += 1
+        if (placeTray(trayIndex + 1)) return true
+        parcelWeights[parcelIndex] -= trayWeight
+        parcelTrayCounts[parcelIndex] -= 1
+      }
+      return false
+    }
+
+    return placeTray(0) ? parcelWeights : null
+  }
 
   const saveCart = () => {
     localStorage.setItem(CART_KEY, JSON.stringify(cart))
@@ -259,8 +286,8 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     if (businessMode) {
       show($('#business-hero'))
       show($('#business-access-gate'), !businessCustomer)
-      const dpdMaxTrays = Number(shop.settings?.businessDpdMaxTrays) || 2
-      const businessShippingCopy = `Bis einschließlich ${dpdMaxTrays} 24er-Trays und maximal 31,5 kg liefern wir per DPD; größere Bestellungen kommen per Spedition.`
+      const dpdMaxTrays = Number(shop.settings?.businessDpdMaxTrays) || 6
+      const businessShippingCopy = `Bis zu ${dpdMaxTrays} 24er-Trays versenden wir aufgeteilt per DPD (maximal 2 Trays und 31,5 kg je Paket); größere oder nicht paketfähige Bestellungen kommen per Spedition.`
       $('#business-shop-link').textContent = 'Privatkundenshop'
       $('#business-shop-link').href = '/brand.html'
       $('#header-contact').textContent = 'Zum B2B-Sortiment'
@@ -268,7 +295,7 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
       $('#shop-title').replaceChildren(document.createTextNode('Dein ZYRO Sortiment.'))
       $('#shop-heading-description').textContent = `Individuelle Verkaufspreise pro 24er-Tray. ${businessShippingCopy}`
       $('#business-hero .business-hero-copy > p:not(.business-eyebrow)').textContent = `Dein direkter Zugang zu vereinbarten Traypreisen. ${businessShippingCopy}`
-      $('#business-hero-facts-spedition').textContent = `Bis ${dpdMaxTrays} Trays DPD, ab ${dpdMaxTrays + 1} Spedition`
+      $('#business-hero-facts-spedition').textContent = `Bis ${dpdMaxTrays} Trays in mehreren DPD-Paketen, darüber Spedition`
       $('#business-shop-banner p:last-child').textContent = `Bestelle bequem in 24er-Trays. ${businessShippingCopy}`
       if (!businessCustomer) {
         const signedIn = Boolean(sessionStorage.getItem(TOKEN_KEY))
@@ -458,6 +485,7 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     let weight = 0
     let deposit = 0
     let trayCount = 0
+    const businessTrayWeights = []
     for (const [id, quantity] of Object.entries(cart)) {
       const product = productById(id)
       if (!product) continue
@@ -465,10 +493,16 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
       subtotal += lineCents(product, quantity)
       weight += quantity * product.unitWeightGrams + Math.floor(quantity / 24) * (settings.largeCartonTareGrams || 0) + (quantity % 24 ? (settings.smallCartonTareGrams || 0) : 0)
       trayCount += Math.ceil(quantity / 24)
+      for (let tray = 0; tray < Math.floor(quantity / 24); tray += 1) {
+        businessTrayWeights.push(product.unitWeightGrams * 24 + (settings.largeCartonTareGrams || 0))
+      }
     }
     const businessCustomer = shop.businessPricing?.active === true
-    const businessShipping = businessCustomer && subtotal > 0
-      && (trayCount > (settings.businessDpdMaxTrays || 2) || weight > 31500)
+    const dpdMaxTrays = Number(settings.businessDpdMaxTrays) || 6
+    const businessDpdParcelWeights = businessCustomer && trayCount <= dpdMaxTrays
+      ? getBusinessDpdParcelWeights(businessTrayWeights)
+      : null
+    const businessShipping = businessCustomer && subtotal > 0 && !businessDpdParcelWeights
     const businessDpdShipping = businessCustomer && subtotal > 0 && !businessShipping
     let shippingPalletCount = 0
     const shippingTiers = Array.isArray(settings.shippingTiers) ? settings.shippingTiers : []
@@ -476,13 +510,25 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
       ? settings.businessDpdShippingTiers
       : shippingTiers
     let shipping = 0
-    let businessDpdShippingTier = null
+    let businessDpdParcelCount = 0
+    let invalidBusinessDpdShipping = false
     if (businessShipping) {
       shippingPalletCount = Math.max(1, Math.ceil(trayCount / (settings.shippingTraysPerPallet || 64)))
       shipping = shippingPalletCount * (settings.shippingPricePerPalletCents ?? 8500)
-    } else if (businessDpdShipping && businessDpdShippingTiers.length) {
-      businessDpdShippingTier = businessDpdShippingTiers.find((entry) => weight <= entry.maxWeightGrams) || null
-      shipping = businessDpdShippingTier?.priceCents ?? 0
+    } else if (businessDpdShipping) {
+      businessDpdParcelCount = businessDpdParcelWeights.length
+      if (!businessDpdShippingTiers.length) {
+        invalidBusinessDpdShipping = true
+      } else {
+        for (const parcelWeight of businessDpdParcelWeights) {
+          const tier = businessDpdShippingTiers.find((entry) => parcelWeight <= entry.maxWeightGrams)
+          if (!tier) {
+            invalidBusinessDpdShipping = true
+            break
+          }
+          shipping += tier.priceCents
+        }
+      }
     } else if (subtotal && shippingTiers.length) {
       const tier = shippingTiers.find((entry) => weight <= entry.maxWeightGrams) || shippingTiers[shippingTiers.length - 1]
       const parcelCount = Math.max(1, Math.ceil(weight / shippingTiers[shippingTiers.length - 1].maxWeightGrams))
@@ -492,7 +538,7 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     } else if (subtotal) {
       shipping = (settings.shippingPriceCents || 0) + Math.ceil(weight / 1000) * (settings.shippingPricePerKgCents || 0)
     }
-    return { subtotal, shipping, deposit, weight, shippingPalletCount, businessShipping, businessDpdShipping, businessDpdShippingTier, total: settings.pricesIncludeVat === false ? null : subtotal + shipping + deposit }
+    return { subtotal, shipping, deposit, weight, shippingPalletCount, businessShipping, businessDpdShipping, businessDpdParcelCount, invalidBusinessDpdShipping, total: settings.pricesIncludeVat === false ? null : subtotal + shipping + deposit }
   }
 
   const renderDiscountProgress = (cartIds) => {
@@ -606,8 +652,7 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
       && ids.some((id) => Number(cart[id]) % 24 !== 0)
     if (empty) lines.append(el('p', 'hint', 'Dein Warenkorb ist leer.'))
     renderDiscountProgress(ids)
-    const { subtotal, shipping, deposit, shippingPalletCount, businessShipping, businessDpdShipping, businessDpdShippingTier } = cartTotals()
-    const invalidBusinessShipping = businessDpdShipping && !businessDpdShippingTier
+    const { subtotal, shipping, deposit, shippingPalletCount, businessShipping, businessDpdShipping, businessDpdParcelCount, invalidBusinessDpdShipping } = cartTotals()
     const discountCents = appliedDiscount?.subtotalCents === subtotal ? appliedDiscount.amountCents : 0
     const row = (label, value, className) => {
       const wrapper = el('div', className)
@@ -616,21 +661,21 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     }
     if (!empty) {
       if (invalidBusinessQuantity) lines.append(el('p', 'notice', 'Für Geschäftskunden sind nur volle 24er-Trays erlaubt. Bitte passe jede Menge an oder entferne den Artikel.'))
-      if (invalidBusinessShipping) lines.append(el('p', 'notice', 'Für dieses Gewicht ist kein DPD-Tarif hinterlegt. Bitte den Shop-Administrator kontaktieren.'))
+      if (invalidBusinessDpdShipping) lines.append(el('p', 'notice', 'Für das Gewicht mindestens eines DPD-Pakets ist kein Tarif hinterlegt. Bitte den Shop-Administrator kontaktieren.'))
       row('Zwischensumme', euro(subtotal))
       if (discountCents > 0) row(`Rabattcode ${appliedDiscount.code}`, `−${euro(discountCents)}`)
       row(businessShipping
         ? `Spedition (${shippingPalletCount} Palette${shippingPalletCount === 1 ? '' : 'n'} à ${euro(shop.settings.shippingPricePerPalletCents ?? 8500)})`
         : businessDpdShipping
-          ? `DPD-Paketversand${businessDpdShippingTier ? ` bis ${(businessDpdShippingTier.maxWeightGrams / 1000).toLocaleString('de-DE')} kg` : ''}`
+          ? `DPD-Paketversand (${businessDpdParcelCount} Paket${businessDpdParcelCount === 1 ? '' : 'e'})`
           : 'Versand (nach Gewicht)', euro(shipping))
       row(shop.settings.pricesIncludeVat === false ? 'Gesamt netto' : 'Gesamt inkl. MwSt.', euro(subtotal - discountCents + shipping), 'grand')
       if (deposit > 0) row('Pfand (zzgl., ohne MwSt.)', euro(deposit))
       if (deposit > 0) row('Zahlbetrag inkl. Pfand', euro(subtotal - discountCents + shipping + deposit), 'grand')
     }
     show($('#to-checkout'), !empty && $('#checkout-form').hidden)
-    $('#to-checkout').disabled = invalidBusinessQuantity || invalidBusinessShipping
-    if (invalidBusinessQuantity || invalidBusinessShipping) show($('#checkout-form'), false)
+    $('#to-checkout').disabled = invalidBusinessQuantity || invalidBusinessDpdShipping
+    if (invalidBusinessQuantity || invalidBusinessDpdShipping) show($('#checkout-form'), false)
     show($('#discount-form'), !empty && !shop.businessPricing?.active)
     if (empty) show($('#checkout-form'), false)
   }
