@@ -1,0 +1,36 @@
+{
+  "expo": {
+    "name": "ZYRO Warenbestand",
+    "slug": "zyro-warenbestand",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "scheme": "zyrowarenbestand",
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "ZYRO benötigt die Kamera, um Produkt-Barcodes zu scannen."
+        }
+      ],
+      "expo-secure-store"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "de.zyro.management.mobile"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}

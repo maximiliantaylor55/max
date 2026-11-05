@@ -1,0 +1,36 @@
+{
+  "id": "/management/",
+  "name": "ZYRO Management",
+  "short_name": "ZYRO",
+  "description": "ZYRO Management und mobiler MDE-Lagerscanner",
+  "lang": "de",
+  "start_url": "/management/",
+  "scope": "/management/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#020817",
+  "theme_color": "#020817",
+  "icons": [
+    {
+      "src": "/management/icons/zyro.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "MDE Scanner",
+      "short_name": "MDE",
+      "description": "Wareneingang und Kundenaufträge scannen",
+      "url": "/management/?mode=mde",
+      "icons": [
+        {
+          "src": "/management/icons/zyro.svg",
+          "sizes": "any",
+          "type": "image/svg+xml"
+        }
+      ]
+    }
+  ]
+}

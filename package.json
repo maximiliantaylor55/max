@@ -1,24 +1,108 @@
 {
   "name": "zyro-programm",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.1.29",
+  "description": "Lokale Desktop-Anwendung für Getränkeproduktion und Verkaufsbelege",
+  "author": "Liberty Street Food GmbH",
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:web": "vite build --config vite.web.config.js",
+    "deploy:web": "npm run build:web && firebase deploy --only functions:call-relay:cloudCallRelay,functions:cloudData,functions:webAppLogin,functions:webAppAuth,functions:webAppData,functions:webAppFinanceReceipt,functions:webAppMde,functions:publicShipmentTracking,functions:customerProductReview,functions:sendDeliveredReviewRequests,functions:getPublicShop,functions:submitPublicOrder,functions:stripeWebhook,functions:manageBrandMail,functions:manageMailbox,functions:registerCustomerPortal,functions:loginCustomerPortal,functions:verifyCustomerPortalEmail,functions:requestCustomerPasswordReset,functions:resetCustomerPortalPassword,functions:requestCustomerPortalCode,functions:verifyCustomerPortalCode,functions:listCustomerPortalOrders,functions:downloadCustomerPortalInvoice,functions:customerPortalProfile,functions:listBusinessCustomers,functions:listCustomerAccounts,functions:deleteCustomerAccount,functions:updateBusinessCustomer,functions:sendPublicInvoiceEmail,functions:cleanupPublicOrderData,hosting --project zyro-78855",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "desktop": "npm run build && electron .",
+    "desktop:pack": "npm run build && electron-builder --win",
+    "desktop:pack:mac": "npm run build && electron-builder --mac --x64 --arm64"
   },
   "dependencies": {
+    "@google/genai": "^2.30.0",
+    "dompurify": "^3.4.17",
+    "electron-updater": "^6.8.11",
+    "events": "^3.3.0",
+    "factur-x-kit": "^0.3.2",
     "firebase": "^13.0.0",
+    "imapflow": "^2.9.1",
+    "jsbarcode": "^3.12.3",
+    "leaflet": "^1.9.4",
+    "mailparser": "^3.12.4",
+    "nodemailer": "^10.2.1",
+    "qrcode": "^1.5.4",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "react-leaflet": "^5.0.0",
+    "simple-peer": "^9.11.1",
+    "sip.js": "^0.21.2",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
+    "electron": "^41.0.0",
+    "electron-builder": "^26.0.12",
     "oxlint": "^1.81.0",
     "vite": "^8.3.0"
+  },
+  "build": {
+    "appId": "com.libertystreetfood.zyro",
+    "productName": "Zyro Management",
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://zyro-78855.web.app/desktop-updates/"
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "!dist/desktop-updates/**/*",
+      "electron/**/*",
+      "functions/finance-validation.cjs",
+      "functions/finance-receipt-validation.cjs",
+      "functions/elster-validation.cjs",
+      "functions/company-details.cjs",
+      "functions/bottler-details.cjs",
+      "functions/payment-requests.cjs",
+      "functions/erp-purchasing.cjs",
+      "functions/lab-tests.cjs",
+      "functions/email-address.cjs",
+      "functions/email-delivery.cjs",
+      "functions/mailbox.cjs",
+      "functions/sipgate.cjs",
+      "functions/sip-softphone-validation.cjs",
+      "package.json"
+    ],
+    "electronDist": "node_modules/electron/dist",
+    "electronLanguages": [
+      "de",
+      "en-US"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "artifactName": "Zyro-Management-Setup-${version}.${ext}",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "mac": {
+      "minimumSystemVersion": "14.0.0",
+      "category": "public.app-category.business",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "artifactName": "Zyro-Management-${version}-${arch}.${ext}"
+    }
   }
 }

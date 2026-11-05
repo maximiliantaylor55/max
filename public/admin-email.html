@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#21170f" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>SMTP-Verwaltung · ZYRO</title>
+    <meta name="robots" content="noindex, nofollow">
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="stylesheet" href="/admin-email.css" />
+    <script src="/admin-email.js" defer></script>
+  </head>
+  <body>
+    <main class="admin-shell">
+      <header class="admin-header">
+        <a class="wordmark" href="/" aria-label="ZYRO Startseite">ZYRO<span>®</span></a>
+        <span class="admin-label">Geschützter Bereich</span>
+      </header>
+
+      <section class="admin-card" aria-labelledby="page-title">
+        <p class="eyebrow">Brand-Website · E-Mail</p>
+        <h1 id="page-title">SMTP verwalten.</h1>
+        <p class="intro">Richte den Versand für das Kontaktformular ein und prüfe die Verbindung mit einer Testmail.</p>
+
+        <aside class="provider-setup" aria-labelledby="provider-setup-title">
+          <h2 id="provider-setup-title">Postfach bei STRATO anlegen</h2>
+          <p>Das Postfach selbst wird bei STRATO erstellt: Kunden-Login öffnen und zu <strong>E-Mail → E-Mail-Verwaltung → + Neu anlegen</strong> gehen. Als Domain <strong>zyro-getränke.de</strong> auswählen und das Postfach, zum Beispiel <strong>info</strong>, mit einem eigenen Passwort anlegen. Danach hier die SMTP-Zugangsdaten speichern und eine Testmail senden.</p>
+          <div class="provider-links">
+            <a href="https://www.strato.de/apps/CustomerService#/skl" target="_blank" rel="noopener noreferrer">STRATO-Kunden-Login öffnen</a>
+            <a href="https://www.strato.de/faq/mail/e-mail-adressen-einrichten-und-bearbeiten/" target="_blank" rel="noopener noreferrer">Anleitung zum Einrichten</a>
+          </div>
+          <p class="provider-note">Aus Sicherheitsgründen wird dein STRATO-Kundenpasswort nicht im ZYRO-Portal eingegeben oder gespeichert.</p>
+        </aside>
+
+        <form id="login-form" class="form-stack">
+          <label for="admin-token">Admin-Token</label>
+          <input id="admin-token" name="token" type="password" autocomplete="current-password" required />
+          <button class="button button-primary" type="submit">Sicher anmelden</button>
+        </form>
+
+        <form id="settings-form" class="form-stack" hidden>
+          <div class="settings-heading">
+            <div>
+              <h2>Mailserver</h2>
+              <p id="configured-status" class="configured-status" role="status">Einstellungen werden geladen …</p>
+            </div>
+            <button id="logout-button" class="button button-quiet" type="button">Abmelden</button>
+          </div>
+
+          <div class="field-grid">
+            <div class="field">
+              <label for="smtp-host">SMTP-Server</label>
+              <input id="smtp-host" name="host" type="text" maxlength="253" placeholder="smtp.example.com" autocomplete="url" required />
+            </div>
+            <div class="field">
+              <label for="smtp-port">Port</label>
+              <input id="smtp-port" name="port" type="number" min="1" max="65535" value="465" required />
+            </div>
+          </div>
+
+          <label class="check-row" for="smtp-secure">
+            <input id="smtp-secure" name="secure" type="checkbox" checked />
+            <span>TLS direkt verwenden (typischerweise Port 465)</span>
+          </label>
+          <p class="field-hint">Bei Port 587 deaktivieren; die Verbindung nutzt dann STARTTLS.</p>
+
+          <label for="smtp-username">SMTP-Benutzername</label>
+          <input id="smtp-username" name="username" type="text" maxlength="254" autocomplete="username" required />
+
+          <label for="smtp-from">Absenderadresse</label>
+          <input id="smtp-from" name="from" type="text" inputmode="email" maxlength="254" autocomplete="email" required />
+
+          <label for="smtp-password">SMTP-Passwort</label>
+          <input id="smtp-password" name="password" type="password" maxlength="512" autocomplete="new-password" />
+          <p class="field-hint">Ein leeres Feld lässt ein bereits gespeichertes Passwort unverändert.</p>
+
+          <div class="form-divider"></div>
+          <label for="test-email">Testmail senden an</label>
+          <input id="test-email" name="testEmail" type="text" inputmode="email" autocomplete="email" placeholder="deine-adresse@example.com" />
+
+          <div class="form-divider"></div>
+          <label for="stripe-secret">Stripe: geheimer Schlüssel (sk_test_… / sk_live_…)</label>
+          <input id="stripe-secret" type="password" maxlength="250" autocomplete="off" />
+          <label for="stripe-webhook">Stripe: Webhook-Geheimnis (whsec_…)</label>
+          <input id="stripe-webhook" type="password" maxlength="250" autocomplete="off" />
+          <p id="stripe-status" class="field-hint">Stripe wird geladen …</p>
+          <div class="button-row">
+            <button id="stripe-button" class="button button-secondary" type="button">Stripe speichern</button>
+          </div>
+
+          <div class="button-row">
+            <button id="save-button" class="button button-primary" type="submit">Einstellungen speichern</button>
+            <button id="test-button" class="button button-secondary" type="button">Speichern &amp; Testmail senden</button>
+          </div>
+        </form>
+
+        <p id="admin-status" class="admin-status" role="status" aria-live="polite"></p>
+        <p class="security-note">Zugangsdaten werden verschlüsselt auf dem Server gespeichert. Diese Seite ist nicht in der öffentlichen Navigation verlinkt.</p>
+      </section>
+    </main>
+  </body>
+</html>

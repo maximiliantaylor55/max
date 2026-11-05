@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#07111f">
+    <meta name="description" content="Verfolge deine ZYRO-Bestellung und öffne die Sendungsverfolgung deines Versanddienstes.">
+    <title>Sendungsverfolgung · ZYRO</title>
+    <meta name="robots" content="noindex, nofollow">
+    <link rel="stylesheet" href="/tracking.css">
+    <script src="/tracking.js" defer></script>
+  </head>
+  <body>
+    <main class="tracking-shell">
+      <a class="brand" href="/" aria-label="ZYRO Startseite">ZYRO<span>GETRÄNKE</span></a>
+      <section class="tracking-card" aria-labelledby="tracking-title">
+        <p class="eyebrow">Deine Bestellung</p>
+        <h1 id="tracking-title">Sendungsverfolgung</h1>
+        <p class="intro">Hier findest du den Versandstatus und den direkten Tracking-Link deines Versanddienstes.</p>
+        <div id="tracking-status" class="notice" role="status" aria-live="polite">
+          Sendungsdaten werden sicher geladen …
+        </div>
+        <div id="tracking-result" class="tracking-result" hidden>
+          <div class="status-line">
+            <span class="status-check" aria-hidden="true">✓</span>
+            <div>
+              <span class="eyebrow">Versandstatus</span>
+              <strong id="shipment-status">Versendet</strong>
+            </div>
+          </div>
+          <dl>
+            <div><dt>Auftragsnummer</dt><dd id="order-number"></dd></div>
+            <div><dt>Versanddienst</dt><dd id="carrier"></dd></div>
+            <div><dt>Sendungsnummer</dt><dd id="tracking-number"></dd></div>
+            <div><dt>Versendet am</dt><dd id="shipped-at"></dd></div>
+          </dl>
+          <div id="carrier-status" hidden>
+            <h2>Status beim Versanddienst</h2>
+            <p id="carrier-status-text"></p>
+            <ol id="carrier-events"></ol>
+          </div>
+          <a id="carrier-link" class="track-button" hidden target="_blank" rel="noopener noreferrer">Sendung beim Versanddienst verfolgen</a>
+        </div>
+        <form id="tracking-form" class="tracking-form">
+          <label for="tracking-token">Persönlicher Tracking-Code</label>
+          <div class="token-row">
+            <input id="tracking-token" name="token" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="64" placeholder="Tracking-Code aus deiner E-Mail" required>
+            <button type="submit">Sendung anzeigen</button>
+          </div>
+          <p>Der persönliche Link aus deiner Versand-E-Mail öffnet diese Seite automatisch.</p>
+        </form>
+        <p class="privacy-note">Der Tracking-Link ist nur für dich bestimmt. Teile ihn nicht öffentlich.</p>
+      </section>
+      <footer>© ZYRO · Fragen zu deiner Bestellung? Antworte einfach auf unsere Versand-E-Mail.</footer>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,49 @@
+name: Build macOS installer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Check required files
+        run: |
+          if [ -e .env ]; then
+            echo "::error::.env must not be present in the repository. Remove it and rotate any credentials it contained."
+            exit 1
+          fi
+          for file in electron/main.cjs functions/index.js package-lock.json; do
+            if [ ! -f "$file" ]; then
+              echo "::error::Required project file is missing: $file. Commit and push the complete desktop source first."
+              exit 1
+            fi
+          done
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build macOS installers
+        run: npm run desktop:pack:mac
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: zyro-management-macos
+          path: |
+            release/*.dmg
+            release/*.zip
+          if-no-files-found: error
+          retention-days: 14

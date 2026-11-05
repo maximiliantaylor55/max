@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+Disallow: /management
+Disallow: /api/
+Disallow: /tracking
+Disallow: /admin-email.html
+Disallow: /anfrage.html
+
+Sitemap: https://xn--zyro-getrnke-ocb.de/sitemap.xml

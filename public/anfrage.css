@@ -1,0 +1,53 @@
+.thread {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.thread-entry {
+  max-width: 90%;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.thread-entry.is-customer {
+  justify-self: end;
+  background: #fbf0d4;
+}
+
+.thread-meta {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+textarea {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  resize: vertical;
+}
+
+textarea:focus-visible {
+  border-color: #a56b16;
+  box-shadow: 0 0 0 3px rgba(237, 184, 74, 0.24);
+  outline: none;
+}
+
+.hp-field {
+  position: absolute;
+  left: -9999px;
+}

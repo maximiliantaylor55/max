@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#21170f" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Deine Anfrage · ZYRO</title>
+    <meta name="robots" content="noindex, nofollow">
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="stylesheet" href="/admin-email.css" />
+    <link rel="stylesheet" href="/anfrage.css" />
+    <script src="/anfrage.js" defer></script>
+  </head>
+  <body>
+    <main class="admin-shell">
+      <header class="admin-header">
+        <a class="wordmark" href="/" aria-label="ZYRO Startseite">ZYRO<span>®</span></a>
+        <span class="admin-label">Deine Anfrage</span>
+      </header>
+
+      <section class="admin-card" aria-labelledby="page-title">
+        <p class="eyebrow">Kontakt · Verlauf</p>
+        <h1 id="page-title">Deine Anfrage.</h1>
+        <p id="inquiry-subject" class="intro">Verlauf wird geladen …</p>
+
+        <div id="thread" class="thread" aria-live="polite"></div>
+
+        <form id="reply-form" class="form-stack" hidden>
+          <label for="reply-text">Deine Antwort</label>
+          <textarea id="reply-text" name="reply" rows="6" minlength="2" maxlength="4000" required></textarea>
+          <input class="hp-field" id="reply-website" name="website" type="text" tabindex="-1" autocomplete="off" aria-hidden="true" />
+          <div class="button-row">
+            <button id="reply-button" class="button button-primary" type="submit">Antwort senden</button>
+          </div>
+        </form>
+
+        <p id="admin-status" class="admin-status" role="status" aria-live="polite"></p>
+        <p class="security-note">Dieser Link ist nur für dich bestimmt. Bitte gib ihn nicht weiter. Deine Nachrichten werden gemäß unserer <a href="/datenschutz.html">Datenschutzerklärung</a> gespeichert.</p>
+      </section>
+    </main>
+  </body>
+</html>

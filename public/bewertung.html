@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="theme-color" content="#14251d" />
+    <title>Deine ZYRO-Bewertung</title>
+    <meta name="description" content="Teile deine Erfahrung mit deinem ZYRO-Getränk." />
+    <link rel="stylesheet" href="/review.css?v=1" />
+    <script type="module" src="/review.js?v=1"></script>
+  </head>
+  <body>
+    <main class="review-shell">
+      <a class="brand" href="/shop">ZYRO<span>®</span></a>
+      <section class="review-card">
+        <p class="eyebrow">Verifizierter Kauf</p>
+        <h1>Dein Geschmack zählt.</h1>
+        <p class="intro">Danke, dass du ZYRO probiert hast. Teile deine ehrliche Meinung mit uns und hilf anderen beim Entdecken.</p>
+        <p id="review-status" class="notice" role="status" aria-live="polite">Dein persönlicher Bewertungslink wird geprüft …</p>
+        <form id="review-form" hidden>
+          <label for="review-product">Welches Produkt möchtest du bewerten?</label>
+          <select id="review-product" name="productId" required></select>
+          <fieldset class="rating">
+            <legend>Wie hat es dir geschmeckt?</legend>
+            <div class="rating-options">
+              <label><input type="radio" name="rating" value="1" required /><span aria-hidden="true">★</span><small>1</small></label>
+              <label><input type="radio" name="rating" value="2" /><span aria-hidden="true">★</span><small>2</small></label>
+              <label><input type="radio" name="rating" value="3" /><span aria-hidden="true">★</span><small>3</small></label>
+              <label><input type="radio" name="rating" value="4" /><span aria-hidden="true">★</span><small>4</small></label>
+              <label><input type="radio" name="rating" value="5" /><span aria-hidden="true">★</span><small>5</small></label>
+            </div>
+          </fieldset>
+          <label for="review-comment">Deine Bewertung <span>(optional)</span></label>
+          <textarea id="review-comment" name="comment" rows="5" maxlength="1000" placeholder="Was hat dir gefallen? Was können wir besser machen?"></textarea>
+          <label class="consent"><input type="checkbox" name="consent" required /><span>Ich stimme zu, dass meine Bewertung nach Prüfung anonymisiert mit dem Hinweis „Verifizierter Kauf“ im ZYRO-Shop veröffentlicht wird.</span></label>
+          <button type="submit" class="submit-button">Bewertung absenden</button>
+        </form>
+        <p class="privacy">Dein Name und deine E-Mail-Adresse werden nicht auf der Shopseite angezeigt. Bewertungen erscheinen erst nach einer Prüfung durch ZYRO.</p>
+      </section>
+      <footer>© ZYRO · Liberty Street Food</footer>
+    </main>
+  </body>
+</html>

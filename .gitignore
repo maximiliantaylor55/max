@@ -10,7 +10,18 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+release
+/release-*/
+/.firebase/
+/scanner-android/.gradle/
+/scanner-android/local.properties
+/scanner-android/app/build/
+/public/management/
+/public/desktop-updates/
 *.local
+.env
+.env.*
+!.env.example
 
 # Editor directories and files
 .vscode/*
