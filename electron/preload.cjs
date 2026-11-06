@@ -17,6 +17,11 @@ contextBridge.exposeInMainWorld('zyroMedia', {
   requestAccess: (media) => ipcRenderer.invoke('zyro-media:request-access', media),
 })
 
+contextBridge.exposeInMainWorld('zyroPrinter', {
+  getPrinters: () => ipcRenderer.invoke('zyro-printer:list'),
+  openSettings: () => ipcRenderer.invoke('zyro-printer:open-settings'),
+})
+
 contextBridge.exposeInMainWorld('zyroAI', {
   getStatus: () => ipcRenderer.invoke('zyro-ai:status'),
   saveKey: (apiKey) => ipcRenderer.invoke('zyro-ai:save-key', apiKey),
@@ -157,6 +162,9 @@ contextBridge.exposeInMainWorld('zyroMde', {
   scanProduct: (orderId, barcode, sessionToken) => ipcRenderer.invoke('zyro-mde:scan-product', orderId, barcode, sessionToken),
   packOrder: (packing, sessionToken) => ipcRenderer.invoke('zyro-mde:pack-order', packing, sessionToken),
   updateShipment: (shipment, sessionToken) => ipcRenderer.invoke('zyro-mde:update-shipment', shipment, sessionToken),
+  getDpdSettings: (sessionToken) => ipcRenderer.invoke('zyro-mde:get-dpd-settings', sessionToken),
+  saveDpdSettings: (settings, sessionToken) => ipcRenderer.invoke('zyro-mde:save-dpd-settings', settings, sessionToken),
+  removeDpdSettings: (sessionToken) => ipcRenderer.invoke('zyro-mde:remove-dpd-settings', sessionToken),
   confirmDelivery: (orderId, sessionToken) => ipcRenderer.invoke('zyro-mde:confirm-delivery', orderId, sessionToken),
   requestReview: (orderId, sessionToken) => ipcRenderer.invoke('zyro-mde:request-review', orderId, sessionToken),
   listProductReviews: (sessionToken) => ipcRenderer.invoke('zyro-mde:list-product-reviews', sessionToken),

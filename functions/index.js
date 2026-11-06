@@ -279,6 +279,7 @@ const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (character) => (
 
 const mailConfigRef = db.collection('privateShop').doc('mail')
 const mailboxConfigRef = db.collection('privateShop').doc('mailbox')
+const dpdConfigRef = db.collection('privateShop').doc('dpd')
 const brandContactMessagesRef = db.collection('brandContactMessages')
 const inquiryConfigRef = db.collection('privateShop').doc('inquiryConfig')
 
@@ -304,6 +305,21 @@ const decryptMailPassword = (mail) => {
     decipher.final(),
   ]).toString('utf8')
 }
+
+const encryptDpdCredentials = (credentials) => {
+  const encrypted = encryptMailPassword(JSON.stringify(credentials))
+  return {
+    credentialsCiphertext: encrypted.passwordCiphertext,
+    credentialsIv: encrypted.passwordIv,
+    credentialsTag: encrypted.passwordTag,
+  }
+}
+
+const decryptDpdCredentials = (settings) => JSON.parse(decryptMailPassword({
+  passwordCiphertext: settings.credentialsCiphertext,
+  passwordIv: settings.credentialsIv,
+  passwordTag: settings.credentialsTag,
+}))
 
 const getMailSettings = async () => {
   const snapshot = await mailConfigRef.get()
@@ -2798,6 +2814,9 @@ exports.webAppMde = onRequest({
     const actor = await getWebAppActor(request)
     const permissions = actor.role === 'admin' ? ['lager', 'mde', 'verkauf', 'versand'] : (Array.isArray(actor.permissions) ? actor.permissions : defaultWebAppPermissions)
     const action = String(request.body?.action || '')
+    if (['dpd-settings-status', 'dpd-settings-save', 'dpd-settings-delete'].includes(action) && actor.role !== 'admin') {
+      return response.status(403).json({ error: 'DPD-Zugangsdaten dürfen nur von einem Admin verwaltet werden.' })
+    }
     if (action === 'receive-purchase-order') {
       if (actor.role !== 'admin' && !permissions.includes('einkauf')) {
         return response.status(403).json({ error: 'Für Einkaufs-Wareneingänge brauchst du die Einkaufsberechtigung.' })
@@ -2836,6 +2855,50 @@ exports.webAppMde = onRequest({
         return response.status(502).json({ error: describeSmtpFailure(error, 'Belegversand') })
       }
       return response.json({ sent: true })
+    }
+
+    if (action === 'dpd-settings-status') {
+      const snapshot = await dpdConfigRef.get()
+      const settings = snapshot.exists ? snapshot.data() : {}
+      const credentials = settings.credentialsCiphertext ? decryptDpdCredentials(settings) : {}
+      return response.json({
+        configured: Boolean(settings.credentialsCiphertext),
+        username: credentials.username || '',
+        customerNumber: credentials.customerNumber || '',
+        depotNumber: credentials.depotNumber || '',
+      })
+    }
+
+    if (action === 'dpd-settings-save') {
+      const username = String(request.body?.username || '').trim()
+      const customerNumber = String(request.body?.customerNumber || '').trim()
+      const depotNumber = String(request.body?.depotNumber || '').trim()
+      const password = String(request.body?.password || '')
+      if (!username || username.length > 254 || !customerNumber || customerNumber.length > 100
+        || !depotNumber || depotNumber.length > 100 || password.length > 1024) {
+        return response.status(400).json({ error: 'DPD-Webservice-Kennung, Kundennummer oder Depotnummer ungültig.' })
+      }
+      const existing = (await dpdConfigRef.get()).data() || {}
+      const existingCredentials = existing.credentialsCiphertext ? decryptDpdCredentials(existing) : null
+      if (!password && !existingCredentials?.password) {
+        return response.status(400).json({ error: 'Bitte das DPD-Webservice-Passwort eintragen.' })
+      }
+      const encryptedCredentials = encryptDpdCredentials({
+        username,
+        customerNumber,
+        depotNumber,
+        password: password || existingCredentials.password,
+      })
+      await dpdConfigRef.set({
+        ...encryptedCredentials,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      })
+      return response.json({ configured: true, username, customerNumber, depotNumber })
+    }
+
+    if (action === 'dpd-settings-delete') {
+      await dpdConfigRef.delete()
+      return response.json({ configured: false })
     }
 
     if (action === 'receive') {

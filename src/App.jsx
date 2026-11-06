@@ -448,6 +448,7 @@ const createReportDraft = (userName = '') => ({
 })
 const initialInventoryForm = { item: '', stock: '', ideal: '', status: 'Gut' }
 const initialMdeReceipt = { barcode: '', quantity: '1', note: '', lot: '', bestBefore: '', preparedChargeId: '' }
+const initialDpdSettingsForm = { username: '', customerNumber: '', depotNumber: '', password: '' }
 const initialLoginForm = { username: '', password: '' }
 const initialRegistrationForm = { name: '', username: '', password: '', activationKey: '' }
 const initialUserForm = { role: 'mitarbeiter' }
@@ -898,6 +899,13 @@ function App() {
   const [mdeScannedQuantities, setMdeScannedQuantities] = useState({})
   const [mdeProductScan, setMdeProductScan] = useState('')
   const [mdeShipmentDrafts, setMdeShipmentDrafts] = useState({})
+  const [desktopPrinters, setDesktopPrinters] = useState([])
+  const [printerSettingsBusy, setPrinterSettingsBusy] = useState(false)
+  const [printerSettingsMessage, setPrinterSettingsMessage] = useState('')
+  const [dpdSettings, setDpdSettings] = useState({ configured: false, loaded: false })
+  const [dpdSettingsForm, setDpdSettingsForm] = useState(initialDpdSettingsForm)
+  const [dpdSettingsBusy, setDpdSettingsBusy] = useState(false)
+  const [dpdSettingsMessage, setDpdSettingsMessage] = useState('')
   const mdeScanInputRef = useRef(null)
   const mdeChargeSelectRef = useRef(null)
   const [editingProductId, setEditingProductId] = useState(null)
@@ -5203,7 +5211,99 @@ function App() {
       trackingUrl: salesDocument.trackingUrl || '',
     }
 
-  const updateMdeShipmentDraft = (salesDocument, field, value) => {
+    const refreshDesktopPrinters = async () => {
+      if (!window.zyroPrinter?.getPrinters) {
+        setPrinterSettingsMessage('Die Druckerverwaltung ist nur in der installierten Desktop-App verfügbar.')
+        return
+      }
+      setPrinterSettingsBusy(true)
+      setPrinterSettingsMessage('')
+      try {
+        const printers = await window.zyroPrinter.getPrinters()
+        setDesktopPrinters(printers)
+        setPrinterSettingsMessage(printers.length
+          ? `${printers.length} Drucker vom Betriebssystem erkannt.`
+          : 'Keine Drucker gefunden. Füge zuerst einen Netzwerkdrucker in den Systemeinstellungen hinzu.')
+      } catch (error) {
+        setPrinterSettingsMessage(`Drucker konnten nicht gesucht werden: ${error.message}`)
+      } finally {
+        setPrinterSettingsBusy(false)
+      }
+    }
+
+    const openDesktopPrinterSettings = async () => {
+      if (!window.zyroPrinter?.openSettings) {
+        setPrinterSettingsMessage('Die Druckereinstellungen sind nur in der installierten Desktop-App verfügbar.')
+        return
+      }
+      setPrinterSettingsBusy(true)
+      setPrinterSettingsMessage('')
+      try {
+        await window.zyroPrinter.openSettings()
+        setPrinterSettingsMessage('Füge den Drucker in den Systemeinstellungen hinzu. Danach hier „Drucker suchen“ wählen.')
+      } catch (error) {
+        setPrinterSettingsMessage(`Druckereinstellungen konnten nicht geöffnet werden: ${error.message}`)
+      } finally {
+        setPrinterSettingsBusy(false)
+      }
+    }
+
+    const loadDpdSettings = async () => {
+      try {
+        if (!window.zyroMde?.getDpdSettings) throw new Error('DPD-Einstellungen sind in dieser App-Version nicht verfügbar.')
+        const settings = await window.zyroMde.getDpdSettings(authSessionToken)
+        setDpdSettingsMessage('')
+        setDpdSettings({ ...settings, loaded: true })
+        setDpdSettingsForm({
+          username: settings.username || '',
+          customerNumber: settings.customerNumber || '',
+          depotNumber: settings.depotNumber || '',
+          password: '',
+        })
+      } catch (error) {
+        setDpdSettingsMessage(`DPD-Einstellungen konnten nicht geladen werden: ${error.message}`)
+      } finally {
+        setDpdSettingsBusy(false)
+      }
+    }
+
+    const saveDpdSettings = async (event) => {
+      event.preventDefault()
+      if (!window.zyroMde?.saveDpdSettings) {
+        setDpdSettingsMessage('DPD-Einstellungen können in dieser App-Version nicht gespeichert werden.')
+        return
+      }
+      setDpdSettingsBusy(true)
+      setDpdSettingsMessage('')
+      try {
+        const settings = await window.zyroMde.saveDpdSettings(dpdSettingsForm, authSessionToken)
+        setDpdSettings({ ...settings, loaded: true })
+        setDpdSettingsForm((current) => ({ ...current, password: '' }))
+        setDpdSettingsMessage('DPD-API-Zugangsdaten wurden verschlüsselt gespeichert. Eine Label-Erstellung ist noch nicht angebunden.')
+      } catch (error) {
+        setDpdSettingsMessage(`DPD-Einstellungen konnten nicht gespeichert werden: ${error.message}`)
+      } finally {
+        setDpdSettingsBusy(false)
+      }
+    }
+
+    const removeDpdSettings = async () => {
+      if (!window.zyroMde?.removeDpdSettings || !window.confirm('Gespeicherte DPD-API-Zugangsdaten wirklich entfernen?')) return
+      setDpdSettingsBusy(true)
+      setDpdSettingsMessage('')
+      try {
+        await window.zyroMde.removeDpdSettings(authSessionToken)
+        setDpdSettings({ configured: false, loaded: true })
+        setDpdSettingsForm(initialDpdSettingsForm)
+        setDpdSettingsMessage('DPD-API-Zugangsdaten wurden entfernt.')
+      } catch (error) {
+        setDpdSettingsMessage(`DPD-Einstellungen konnten nicht entfernt werden: ${error.message}`)
+      } finally {
+        setDpdSettingsBusy(false)
+      }
+    }
+
+    const updateMdeShipmentDraft = (salesDocument, field, value) => {
       setMdeShipmentDrafts((current) => ({
         ...current,
         [salesDocument.id]: { ...getShipmentDraft(salesDocument), [field]: value },
@@ -9875,9 +9975,111 @@ function App() {
               <div>
                 <p className="eyebrow">Versandzentrale</p>
                 <h2>Pakete, Etiketten &amp; Sendungsverfolgung</h2>
-                <p className="meta">Versanddaten werden in der Cloud gespeichert und mit dem Kundenauftrag synchronisiert. DPD und Spedition sind verfügbar; für echte frankierte DPD-Labels muss der DPD-Webservice-Zugang eingerichtet sein. Bis dahin druckt die App interne Adressetiketten ohne Porto.</p>
+                <p className="meta">Versanddaten werden in der Cloud gespeichert und mit dem Kundenauftrag synchronisiert. DPD und Spedition sind verfügbar. Die Einrichtung eines DPD-API-Zugangs ist vorbereitet; echte frankierte Labels erfordern zusätzlich die DPD-Schnittstellendokumentation und eine technische Anbindung.</p>
               </div>
             </div>
+            <section className="panel shipment-card">
+              <div className="panel-header">
+                <div>
+                  <h3>Netzwerkdrucker verbinden</h3>
+                  <p className="meta">Drucker im selben WLAN/LAN zuerst in Windows oder macOS hinzufügen. Zyro verwendet anschließend den System-Druckdialog; dort kannst du für Etiketten und Lieferscheine den gewünschten Drucker wählen.</p>
+                </div>
+              </div>
+              <p className="meta">Das ist kein Cloud-Druck zu einem Drucker an einem anderen Standort. Der Drucker muss im lokalen Netzwerk erreichbar und im Betriebssystem eingerichtet sein.</p>
+              <div className="finance-form-actions">
+                <button type="button" className="secondary-button" onClick={openDesktopPrinterSettings} disabled={printerSettingsBusy || !window.zyroPrinter?.openSettings}>
+                  Drucker in Systemeinstellungen verbinden
+                </button>
+                <button type="button" className="secondary-button" onClick={refreshDesktopPrinters} disabled={printerSettingsBusy || !window.zyroPrinter?.getPrinters}>
+                  {printerSettingsBusy ? 'Suche …' : 'Drucker suchen'}
+                </button>
+              </div>
+              {desktopPrinters.length > 0 && (
+                <ul className="desktop-printer-list">
+                  {desktopPrinters.map((printer) => (
+                    <li key={printer.name}>
+                      <strong>{printer.displayName}</strong>
+                      {printer.isDefault && <span>Standarddrucker</span>}
+                      {printer.description && <small>{printer.description}</small>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {printerSettingsMessage && <p className="mde-feedback" role="status">{printerSettingsMessage}</p>}
+            </section>
+            {currentUser?.role === 'admin' && (
+              <section className="panel shipment-card">
+                <div className="panel-header">
+                  <div>
+                    <h3>DPD-Webservice einrichten</h3>
+                    <p className="meta">
+                      {!dpdSettings.loaded
+                        ? 'Status noch nicht geladen. Bitte aktualisieren.'
+                        : dpdSettings.configured
+                        ? `API-Zugangsdaten gespeichert für Kundennummer ${dpdSettings.customerNumber} · Depot ${dpdSettings.depotNumber}.`
+                        : 'Noch keine DPD-API-Zugangsdaten gespeichert.'}
+                    </p>
+                  </div>
+                  <button type="button" className="secondary-button small" onClick={() => { setDpdSettingsBusy(true); void loadDpdSettings() }} disabled={dpdSettingsBusy}>
+                    Status aktualisieren
+                  </button>
+                </div>
+                <p className="meta">Nur DPD-WebConnect/API-Zugangsdaten verwenden – nicht dein myDPD-Business-Portal-Login. Zugangsdaten werden serverseitig verschlüsselt gespeichert und nur Admins können sie verwalten. Diese Einrichtung erstellt noch keine Labels; dafür fehlen derzeit die DPD-Schnittstellendokumentation und die eigentliche API-Anbindung.</p>
+                <form className="form-grid" onSubmit={saveDpdSettings}>
+                  <label>
+                    DPD-API-Kennung
+                    <input
+                      autoComplete="username"
+                      maxLength="254"
+                      required
+                      value={dpdSettingsForm.username}
+                      onChange={(event) => setDpdSettingsForm((current) => ({ ...current, username: event.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    DPD-Kundennummer
+                    <input
+                      maxLength="100"
+                      required
+                      value={dpdSettingsForm.customerNumber}
+                      onChange={(event) => setDpdSettingsForm((current) => ({ ...current, customerNumber: event.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    DPD-Depotnummer
+                    <input
+                      maxLength="100"
+                      required
+                      value={dpdSettingsForm.depotNumber}
+                      onChange={(event) => setDpdSettingsForm((current) => ({ ...current, depotNumber: event.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    DPD-API-Passwort
+                    <input
+                      autoComplete="new-password"
+                      maxLength="1024"
+                      required={!dpdSettings.configured}
+                      type="password"
+                      value={dpdSettingsForm.password}
+                      onChange={(event) => setDpdSettingsForm((current) => ({ ...current, password: event.target.value }))}
+                    />
+                    {dpdSettings.configured && <small>Leer lassen, um das gespeicherte Passwort beizubehalten.</small>}
+                  </label>
+                  <div className="finance-form-actions">
+                    <button type="submit" className="primary-button" disabled={dpdSettingsBusy}>
+                      {dpdSettingsBusy ? 'Wird gespeichert …' : 'DPD-API-Zugang speichern'}
+                    </button>
+                    {dpdSettings.configured && (
+                      <button type="button" className="secondary-button" disabled={dpdSettingsBusy} onClick={removeDpdSettings}>
+                        Zugangsdaten entfernen
+                      </button>
+                    )}
+                  </div>
+                </form>
+                {dpdSettingsMessage && <p className="mde-feedback" role="status">{dpdSettingsMessage}</p>}
+              </section>
+            )}
             {salesDocuments.filter((document) =>
               document.kind === 'kundenauftrag' && ['Verpackt', 'Versendet'].includes(document.status),
             ).length ? (

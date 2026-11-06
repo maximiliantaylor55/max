@@ -2239,6 +2239,9 @@ ipcMain.handle('zyro-mde:accept-order', (event, orderId, sessionToken) => reques
 ipcMain.handle('zyro-mde:scan-product', (event, orderId, barcode, sessionToken) => requestMdeCloud(event, 'scan', { orderId, barcode }, sessionToken))
 ipcMain.handle('zyro-mde:pack-order', (event, packing, sessionToken) => requestMdeCloud(event, 'pack', packing, sessionToken))
 ipcMain.handle('zyro-mde:update-shipment', (event, shipment, sessionToken) => requestMdeCloud(event, 'shipment', shipment, sessionToken))
+ipcMain.handle('zyro-mde:get-dpd-settings', (event, sessionToken) => requestMdeCloud(event, 'dpd-settings-status', {}, sessionToken))
+ipcMain.handle('zyro-mde:save-dpd-settings', (event, settings, sessionToken) => requestMdeCloud(event, 'dpd-settings-save', settings, sessionToken))
+ipcMain.handle('zyro-mde:remove-dpd-settings', (event, sessionToken) => requestMdeCloud(event, 'dpd-settings-delete', {}, sessionToken))
 ipcMain.handle('zyro-mde:confirm-delivery', (event, orderId, sessionToken) => requestMdeCloud(event, 'delivery-confirm', { orderId }, sessionToken))
 ipcMain.handle('zyro-mde:request-review', (event, orderId, sessionToken) => requestMdeCloud(event, 'review-request', { orderId }, sessionToken))
 ipcMain.handle('zyro-mde:list-product-reviews', (event, sessionToken) => requestMdeCloud(event, 'reviews-list', {}, sessionToken))
@@ -3113,6 +3116,35 @@ const assertDesktopUpdatesSupported = () => {
 ipcMain.handle('zyro-updater:get-state', (event) => {
   assertTrustedFrame(event)
   return desktopUpdateState
+})
+
+ipcMain.handle('zyro-printer:list', async (event) => {
+  assertTrustedFrame(event)
+  const window = BrowserWindow.fromWebContents(event.sender)
+  if (!window) throw new Error('Das Druckerfenster ist nicht verfügbar.')
+  const printers = await window.webContents.getPrintersAsync()
+  return printers
+    .map((printer) => ({
+      name: printer.name,
+      displayName: printer.displayName || printer.name,
+      description: printer.description || '',
+      isDefault: printer.isDefault === true,
+    }))
+    .sort((left, right) => Number(right.isDefault) - Number(left.isDefault)
+      || left.displayName.localeCompare(right.displayName, 'de'))
+})
+
+ipcMain.handle('zyro-printer:open-settings', async (event) => {
+  assertTrustedFrame(event)
+  if (process.platform === 'win32') {
+    await shell.openExternal('ms-settings:printers')
+    return { opened: true }
+  }
+  if (process.platform === 'darwin') {
+    await shell.openExternal('x-apple.systempreferences:com.apple.Print-Scan-Settings.extension')
+    return { opened: true }
+  }
+  throw new Error('Druckereinstellungen werden auf diesem Betriebssystem nicht unterstützt.')
 })
 
 ipcMain.handle('zyro-media:request-access', async (event, media = {}) => {
