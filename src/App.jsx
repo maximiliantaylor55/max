@@ -7045,7 +7045,7 @@ function App() {
                   disabled={desktopUpdateBusy || ['checking', 'downloading'].includes(desktopUpdateState.status)}
                 >
                   {desktopUpdateState.platform === 'darwin'
-                    ? 'Mac-Update herunterladen'
+                    ? 'Mac-Update aus der Cloud laden'
                     : desktopUpdateState.status === 'downloading'
                     ? `Update wird geladen … ${desktopUpdateState.percent}%`
                     : desktopUpdateBusy || desktopUpdateState.status === 'checking'
@@ -7058,7 +7058,7 @@ function App() {
                 </button>
                 <small role="status" aria-live="polite">
                   {desktopUpdateState.platform === 'darwin'
-                    ? `Version ${desktopUpdateState.currentVersion} · Öffnet den aktuellen Mac-Installer`
+                    ? `Version ${desktopUpdateState.currentVersion} · Öffnet die Mac-Downloads aus der Cloud`
                     : desktopUpdateState.status === 'available'
                     ? `Version ${desktopUpdateState.availableVersion} verfügbar`
                     : desktopUpdateState.status === 'downloading'

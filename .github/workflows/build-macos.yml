@@ -12,6 +12,9 @@ on:
       - 'index.html'
       - 'package.json'
       - 'package-lock.json'
+      - 'firebase.json'
+      - '.gitignore'
+      - 'public/desktop-updates/macos.*'
       - 'vite.config.*'
   workflow_dispatch:
 
@@ -59,3 +62,52 @@ jobs:
             release/*.zip
           if-no-files-found: error
           retention-days: 90
+
+      - name: Publish installers to Firebase Hosting
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          if [ -z "$FIREBASE_TOKEN" ]; then
+            echo "::warning::Set the repository secret FIREBASE_TOKEN to publish desktop installers to Firebase Hosting."
+            exit 0
+          fi
+
+          mkdir -p public/desktop-updates/macos
+          curl --fail --silent --show-error \
+            https://zyro-78855.web.app/desktop-updates/latest.yml \
+            --output public/desktop-updates/latest.yml
+          windows_installer="$(awk '/^  - url: / { print $3; exit }' public/desktop-updates/latest.yml)"
+          if [ -z "$windows_installer" ]; then
+            echo "::error::Could not determine the current Windows installer from the cloud manifest."
+            exit 1
+          fi
+          for file in "$windows_installer" "$windows_installer.blockmap"; do
+            curl --fail --silent --show-error \
+              "https://zyro-78855.web.app/desktop-updates/$file" \
+              --output "public/desktop-updates/$file"
+          done
+
+          cp release/*.dmg public/desktop-updates/macos/
+          node <<'NODE'
+          const fs = require('node:fs')
+          const version = require('./package.json').version
+          const architectures = [
+            { arch: 'arm64', label: 'Apple Silicon (M1, M2, M3 oder neuer)' },
+            { arch: 'x64', label: 'Intel-Mac' },
+          ]
+          const files = architectures.map(({ arch, label }) => {
+            const name = `Zyro-Management-${version}-${arch}.dmg`
+            if (!fs.existsSync(`public/desktop-updates/macos/${name}`)) {
+              throw new Error(`Missing macOS installer: ${name}`)
+            }
+            return { name, label }
+          })
+          fs.writeFileSync(
+            'public/desktop-updates/macos/latest.json',
+            JSON.stringify({ version, files }),
+          )
+          NODE
+
+          npm run build:web
+          npm install --global firebase-tools
+          firebase deploy --only hosting --project zyro-78855 --non-interactive

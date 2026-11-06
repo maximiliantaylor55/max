@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Mac-Update · ZYRO Management</title>
+  <style>
+    :root{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#17352a;background:#f4f7f3}
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px}
+    main{width:min(100%,560px);padding:32px;border:1px solid #dfe8df;border-radius:20px;background:#fff;box-shadow:0 18px 55px #18382912}
+    .eyebrow{margin:0 0 8px;color:#597b32;font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}
+    h1{margin:0;font-size:clamp(28px,6vw,38px);letter-spacing:-.04em}
+    .intro{color:#607169;line-height:1.6}
+    .downloads{display:grid;gap:12px;margin:24px 0}
+    a{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:16px 18px;border-radius:12px;background:#17352a;color:#fff;text-decoration:none;font-weight:700}
+    a:hover{background:#285540}
+    .version{color:#728177;font-size:13px}
+    .note{padding:14px;border-radius:10px;background:#f2f6ec;color:#5a6c58;font-size:13px;line-height:1.5}
+    @media(max-width:480px){main{padding:24px 20px}a{align-items:flex-start;flex-direction:column}}
+  </style>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">ZYRO Management · Cloud-Update</p>
+    <h1>Mac-Version laden</h1>
+    <p class="intro">Wähle den Installer passend zu deinem Mac. Öffne danach die DMG und ziehe Zyro Management in den Programme-Ordner.</p>
+    <p class="version" id="version" role="status">Aktuelle Version wird geladen …</p>
+    <nav class="downloads" id="downloads" aria-label="Mac-Installer"></nav>
+    <p class="note">Apple Silicon: M1, M2, M3 oder neuer. Intel: ältere Macs. Falls macOS die App blockiert, öffne sie über Systemeinstellungen → Datenschutz &amp; Sicherheit.</p>
+  </main>
+  <script src="/desktop-updates/macos.js" defer></script>
+</body>
+</html>

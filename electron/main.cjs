@@ -3176,7 +3176,7 @@ ipcMain.handle('zyro-updater:open-macos-downloads', async (event) => {
   if (process.platform !== 'darwin' || !app.isPackaged) {
     throw new Error('Der Mac-Installer ist nur in der installierten macOS-App verfügbar.')
   }
-  await shell.openExternal('https://github.com/maximiliantaylor55/max/actions/workflows/build-macos.yml')
+  await shell.openExternal('https://zyro-78855.web.app/desktop-updates/macos.html')
   return { opened: true }
 })
 

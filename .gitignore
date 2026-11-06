@@ -17,7 +17,10 @@ release
 /scanner-android/local.properties
 /scanner-android/app/build/
 /public/management/
-/public/desktop-updates/
+!/public/desktop-updates/
+/public/desktop-updates/*
+!/public/desktop-updates/macos.html
+!/public/desktop-updates/macos.js
 *.local
 .env
 .env.*
