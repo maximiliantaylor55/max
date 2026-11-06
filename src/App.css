@@ -2337,6 +2337,21 @@ textarea {
   margin: 5px 0 0;
 }
 
+.desktop-printer-select {
+  display: grid;
+  gap: 7px;
+  max-width: 520px;
+  color: #cbd5e1;
+}
+
+.desktop-printer-select select {
+  min-height: 46px;
+}
+
+.desktop-printer-select small {
+  color: #94a3b8;
+}
+
 .desktop-printer-list {
   display: grid;
   gap: 8px;

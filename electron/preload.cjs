@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('zyroMedia', {
 contextBridge.exposeInMainWorld('zyroPrinter', {
   getPrinters: () => ipcRenderer.invoke('zyro-printer:list'),
   openSettings: () => ipcRenderer.invoke('zyro-printer:open-settings'),
+  printHtml: (html, printerName, pageSize) => ipcRenderer.invoke('zyro-printer:print-html', html, printerName, pageSize),
 })
 
 contextBridge.exposeInMainWorld('zyroAI', {

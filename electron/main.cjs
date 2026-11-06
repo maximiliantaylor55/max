@@ -3147,6 +3147,49 @@ ipcMain.handle('zyro-printer:open-settings', async (event) => {
   throw new Error('Druckereinstellungen werden auf diesem Betriebssystem nicht unterstützt.')
 })
 
+ipcMain.handle('zyro-printer:print-html', async (event, html, printerName = '', pageSize = 'A4') => {
+  assertTrustedFrame(event)
+  if (typeof html !== 'string' || !html.startsWith('<!doctype html>') || html.length > 2_000_000) {
+    throw new Error('Druckinhalt ist ungültig oder zu groß.')
+  }
+  if (!['A4', 'label'].includes(pageSize)) throw new Error('Papierformat wird nicht unterstützt.')
+  const selectedPrinter = String(printerName || '')
+  if (selectedPrinter) {
+    const printers = await event.sender.getPrintersAsync()
+    if (!printers.some((printer) => printer.name === selectedPrinter)) {
+      throw new Error('Der ausgewählte Drucker wurde nicht gefunden. Bitte Druckerliste aktualisieren.')
+    }
+  }
+
+  const printWindow = new BrowserWindow({
+    show: false,
+    parent: BrowserWindow.fromWebContents(event.sender) || undefined,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  })
+  try {
+    await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+    await new Promise((resolve, reject) => {
+      const options = {
+        silent: true,
+        printBackground: true,
+        pageSize: pageSize === 'label' ? { width: 100000, height: 150000 } : 'A4',
+        ...(selectedPrinter ? { deviceName: selectedPrinter } : {}),
+      }
+      printWindow.webContents.print(options, (success, failureReason) => {
+        if (success) resolve()
+        else reject(new Error(failureReason || 'Drucken fehlgeschlagen.'))
+      })
+    })
+    return { printed: true }
+  } finally {
+    if (!printWindow.isDestroyed()) printWindow.close()
+  }
+})
+
 ipcMain.handle('zyro-media:request-access', async (event, media = {}) => {
   assertTrustedFrame(event)
   const requestedMedia = []

@@ -900,6 +900,7 @@ function App() {
   const [mdeProductScan, setMdeProductScan] = useState('')
   const [mdeShipmentDrafts, setMdeShipmentDrafts] = useState({})
   const [desktopPrinters, setDesktopPrinters] = useState([])
+  const [selectedDesktopPrinter, setSelectedDesktopPrinter] = useState(() => localStorage.getItem('zyro-selected-printer') || '')
   const [printerSettingsBusy, setPrinterSettingsBusy] = useState(false)
   const [printerSettingsMessage, setPrinterSettingsMessage] = useState('')
   const [dpdSettings, setDpdSettings] = useState({ configured: false, loaded: false })
@@ -5060,7 +5061,7 @@ function App() {
 
   const completeMdePacking = async () => {
     if (!mdeSelectedOrder) return
-    const nativePrintAvailable = Boolean(window.zyroScanner?.printLabel)
+    const nativePrintAvailable = Boolean(window.zyroScanner?.printLabel || window.zyroPrinter?.printHtml)
     const labelWindow = nativePrintAvailable ? null : window.open('', '_blank', 'width=820,height=640')
     if (!nativePrintAvailable && !labelWindow) {
       setMdeMessage('Der Etikettendruck wurde vom Browser blockiert. Bitte Pop-ups für diese App erlauben und erneut versuchen.')
@@ -5094,7 +5095,12 @@ function App() {
       setProducts(result.products)
       setSalesDocuments(result.salesDocuments)
       setStockMovements(result.stockMovements)
-      printMdeShippingLabel(labelWindow, mdeSelectedOrder)
+      let printMessage = ''
+      try {
+        await printMdeShippingLabel(labelWindow, mdeSelectedOrder)
+      } catch (printError) {
+        printMessage = ` Das Versandetikett konnte nicht gedruckt werden: ${printError.message}`
+      }
       setMdeScannedQuantities({})
       setMdeOrderId('')
       const invoiceText = result.invoiceNumber
@@ -5103,8 +5109,8 @@ function App() {
           : ` Rechnung ${result.invoiceNumber} erstellt, aber nicht zugestellt: ${result.invoiceError || 'Unbekannter Fehler'}`
         : result.invoiceError ? ` Rechnung konnte nicht erstellt werden: ${result.invoiceError}` : ''
       setMdeMessage(result.emailSent
-        ? `Auftrag ${mdeSelectedOrder.number} verpackt. Kunden-E-Mail wurde gesendet.${invoiceText}`
-        : `Auftrag ${mdeSelectedOrder.number} verpackt, aber die Kunden-E-Mail konnte nicht gesendet werden: ${result.emailError || 'Unbekannter Mailfehler'}.${invoiceText}`)
+        ? `Auftrag ${mdeSelectedOrder.number} verpackt. Kunden-E-Mail wurde gesendet.${invoiceText}${printMessage}`
+        : `Auftrag ${mdeSelectedOrder.number} verpackt, aber die Kunden-E-Mail konnte nicht gesendet werden: ${result.emailError || 'Unbekannter Mailfehler'}.${invoiceText}${printMessage}`)
     } catch (packingError) {
       labelWindow?.close()
       setMdeMessage(`Verpackungsabschluss fehlgeschlagen: ${packingError.message}`)
@@ -5113,7 +5119,7 @@ function App() {
     }
   }
 
-  const printMdeShippingLabel = (labelWindow, salesDocument, shipment = salesDocument) => {
+  const printMdeShippingLabel = async (labelWindow, salesDocument, shipment = salesDocument) => {
       const escapeHtml = (value) => String(value || '').replace(/[&<>"']/g, (character) => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
       })[character])
@@ -5135,6 +5141,11 @@ function App() {
       const labelHtml = `<!doctype html><html lang="de"><head><meta charset="utf-8"><title>Versandetikett ${escapeHtml(salesDocument.number)}</title><style>
         @page{size:100mm 150mm;margin:5mm}*{box-sizing:border-box}body{font:14px Arial,sans-serif;color:#111;margin:0}.label{width:90mm;min-height:140mm;border:1px solid #222;padding:7mm;display:flex;flex-direction:column;gap:8px}.brand{font-size:22px;font-weight:800;letter-spacing:2px}.notice{font-size:9px;color:#555;border-bottom:1px solid #bbb;padding-bottom:6px}.recipient{font-size:19px;font-weight:700;white-space:pre-line;line-height:1.4}.meta{margin-top:auto;border-top:1px solid #bbb;padding-top:8px}.code{font-size:24px;font-weight:700;letter-spacing:1px}.barcode{width:100%;height:42px}.foot{font-size:9px;color:#555}
         </style></head><body><main class="label"><div class="brand">ZYRO</div><div class="notice">INTERNES VERSANDETIKETT · KEIN FRANKIERLABEL</div><div><strong>Empfänger</strong><p class="recipient">${escapeHtml(salesDocument.recipient)}<br>${escapeHtml(address)}</p></div><div class="meta"><p><strong>Auftrag:</strong> ${escapeHtml(salesDocument.number)}</p><p><strong>Versand:</strong> ${escapeHtml(carrier)}</p>${tracking}<div class="code">${escapeHtml(orderCode)}</div><div class="barcode">${barcodeMarkup}</div><div class="foot">Etikett zur internen Zuordnung und Adressierung.</div></div></main></body></html>`
+      if (window.zyroPrinter?.printHtml) {
+        await window.zyroPrinter.printHtml(labelHtml, selectedDesktopPrinter, 'label')
+        labelWindow?.close()
+        return
+      }
       if (window.zyroScanner?.printLabel) {
         try {
           window.zyroScanner.printLabel(labelHtml)
@@ -5152,8 +5163,8 @@ function App() {
     }
 
   const printMdeDeliveryNote = async (salesDocument) => {
-    const printWindow = window.open('', '_blank')
-    if (!printWindow) {
+    const printWindow = window.zyroPrinter?.printHtml ? null : window.open('', '_blank')
+    if (!window.zyroPrinter?.printHtml && !printWindow) {
       setMdeMessage('Der Lieferschein konnte nicht geöffnet werden. Bitte Pop-ups für diese App erlauben.')
       return
     }
@@ -5194,12 +5205,16 @@ function App() {
         <div class="qr">${qrMarkup}<div><div class="qr-code">${escapeHtml(orderCode)}</div><div class="muted">QR-Code zur schnellen Auftragszuordnung in der Desktop-App</div></div></div>
         <footer>${escapeHtml(company.name)} · ${escapeHtml(company.street)} · ${escapeHtml(company.postalCode)} ${escapeHtml(company.city)}</footer>
         </body></html>`
-      printWindow.document.open()
-      printWindow.document.write(html)
-      printWindow.document.close()
-      window.setTimeout(() => printWindow.print(), 350)
+      if (window.zyroPrinter?.printHtml) {
+        await window.zyroPrinter.printHtml(html, selectedDesktopPrinter, 'A4')
+      } else {
+        printWindow.document.open()
+        printWindow.document.write(html)
+        printWindow.document.close()
+        window.setTimeout(() => printWindow.print(), 350)
+      }
     } catch (error) {
-      printWindow.close()
+      printWindow?.close()
       setMdeMessage(`Lieferschein konnte nicht erstellt werden: ${error.message}`)
     }
   }
@@ -5231,6 +5246,12 @@ function App() {
       }
     }
 
+    const selectDesktopPrinter = (printerName) => {
+      setSelectedDesktopPrinter(printerName)
+      if (printerName) localStorage.setItem('zyro-selected-printer', printerName)
+      else localStorage.removeItem('zyro-selected-printer')
+    }
+
     const openDesktopPrinterSettings = async () => {
       if (!window.zyroPrinter?.openSettings) {
         setPrinterSettingsMessage('Die Druckereinstellungen sind nur in der installierten Desktop-App verfügbar.')
@@ -5245,6 +5266,28 @@ function App() {
         setPrinterSettingsMessage(`Druckereinstellungen konnten nicht geöffnet werden: ${error.message}`)
       } finally {
         setPrinterSettingsBusy(false)
+      }
+    }
+
+    const printDesktopTestPage = async () => {
+      const printWindow = window.zyroPrinter?.printHtml ? null : window.open('', '_blank', 'width=820,height=640')
+      if (!window.zyroPrinter?.printHtml && !printWindow) {
+        setPrinterSettingsMessage('Der Druckdialog wurde vom Browser blockiert. Bitte Pop-ups erlauben.')
+        return
+      }
+      const html = '<!doctype html><html lang="de"><head><meta charset="utf-8"><title>Zyro Druckertest</title><style>@page{size:A4;margin:18mm}body{font:16px Arial,sans-serif;color:#111}h1{font-size:28px}.sample{margin:28px 0;padding:18px;border:2px solid #111}.bars{height:28px;background:repeating-linear-gradient(90deg,#111 0 3px,#fff 3px 6px);max-width:320px}small{color:#555}</style></head><body><h1>ZYRO · Druckertest</h1><p>Wenn diese Seite lesbar gedruckt wird, ist der ausgewählte Drucker einsatzbereit.</p><div class="sample"><strong>Netzwerkdrucker</strong><p>Testdruck aus der Zyro-Desktop-App</p><div class="bars"></div></div><p>Datum: ' + new Date().toLocaleString('de-DE') + '</p><small>Dieser Test erstellt keinen Versandauftrag und kein frankiertes DPD-Label.</small></body></html>'
+      try {
+        if (window.zyroPrinter?.printHtml) {
+          await window.zyroPrinter.printHtml(html, selectedDesktopPrinter, 'A4')
+        } else {
+          printWindow.document.open()
+          printWindow.document.write(html)
+          printWindow.document.close()
+          window.setTimeout(() => printWindow.print(), 350)
+        }
+        setPrinterSettingsMessage(`Testseite an ${selectedDesktopPrinter || 'den Standarddrucker'} gesendet.`)
+      } catch (error) {
+        setPrinterSettingsMessage(`Testseite konnte nicht gedruckt werden: ${error.message}`)
       }
     }
 
@@ -9993,7 +10036,26 @@ function App() {
                 <button type="button" className="secondary-button" onClick={refreshDesktopPrinters} disabled={printerSettingsBusy || !window.zyroPrinter?.getPrinters}>
                   {printerSettingsBusy ? 'Suche …' : 'Drucker suchen'}
                 </button>
+                <button type="button" className="secondary-button" onClick={printDesktopTestPage} disabled={printerSettingsBusy}>
+                  Testseite drucken
+                </button>
               </div>
+              <label className="desktop-printer-select">
+                Drucker für Zyro-Drucke
+                <select
+                  value={selectedDesktopPrinter}
+                  onChange={(event) => selectDesktopPrinter(event.target.value)}
+                  disabled={!window.zyroPrinter?.getPrinters}
+                >
+                  <option value="">System-Standarddrucker</option>
+                  {desktopPrinters.map((printer) => (
+                    <option key={printer.name} value={printer.name}>
+                      {printer.displayName}{printer.isDefault ? ' · Standard' : ''}
+                    </option>
+                  ))}
+                </select>
+                <small>Die Auswahl wird auf diesem PC gespeichert und für Testseite, Versandetikett und Lieferschein verwendet.</small>
+              </label>
               {desktopPrinters.length > 0 && (
                 <ul className="desktop-printer-list">
                   {desktopPrinters.map((printer) => (
@@ -10100,18 +10162,23 @@ function App() {
                           <button
                             type="button"
                             className="secondary-button"
-                            onClick={() => {
-                              const nativePrintAvailable = Boolean(window.zyroScanner?.printLabel)
+                            onClick={async () => {
+                              const nativePrintAvailable = Boolean(window.zyroScanner?.printLabel || window.zyroPrinter?.printHtml)
                               const labelWindow = nativePrintAvailable ? null : window.open('', '_blank', 'width=820,height=640')
                               if (!nativePrintAvailable && !labelWindow) {
                                 setMdeMessage('Der Etikettendruck wurde vom Browser blockiert. Bitte Pop-ups erlauben.')
                                 return
                               }
-                              printMdeShippingLabel(labelWindow, salesDocument, {
-                                ...salesDocument,
-                                ...draft,
-                                carrierName: draft.carrier === 'DPD' ? 'DPD' : draft.carrierName,
-                              })
+                              try {
+                                await printMdeShippingLabel(labelWindow, salesDocument, {
+                                  ...salesDocument,
+                                  ...draft,
+                                  carrierName: draft.carrier === 'DPD' ? 'DPD' : draft.carrierName,
+                                })
+                              } catch (error) {
+                                labelWindow?.close()
+                                setMdeMessage(`Versandetikett konnte nicht gedruckt werden: ${error.message}`)
+                              }
                             }}
                           >
                             Internes Versandetikett drucken
