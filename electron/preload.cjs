@@ -13,6 +13,10 @@ contextBridge.exposeInMainWorld('zyroUpdater', {
   },
 })
 
+contextBridge.exposeInMainWorld('zyroMedia', {
+  requestAccess: (media) => ipcRenderer.invoke('zyro-media:request-access', media),
+})
+
 contextBridge.exposeInMainWorld('zyroAI', {
   getStatus: () => ipcRenderer.invoke('zyro-ai:status'),
   saveKey: (apiKey) => ipcRenderer.invoke('zyro-ai:save-key', apiKey),

@@ -1784,7 +1784,13 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (remoteAudioRef.current) remoteAudioRef.current.srcObject = remoteAudioStream
+    if (!remoteAudioRef.current) return
+    remoteAudioRef.current.srcObject = remoteAudioStream
+    if (remoteAudioStream) {
+      remoteAudioRef.current.play().catch((error) => {
+        setCallError(`Lautsprecher konnten nicht gestartet werden: ${error.message}`)
+      })
+    }
   }, [remoteAudioStream])
 
   useEffect(() => {
@@ -1808,6 +1814,8 @@ function App() {
     if (callConnectionStatus !== 'verbunden' || activeCallIdRef.current) return
     setCallError('')
     try {
+      const permission = await window.zyroMedia?.requestAccess({ audio: true, video: videoEnabled })
+      if (permission && !permission.granted) throw new Error(permission.message)
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: videoEnabled })
       const callId = crypto.randomUUID()
       activeCallIdRef.current = callId
@@ -1832,6 +1840,8 @@ function App() {
     if (!pendingCall || pendingCall.status !== 'incoming') return
     setCallError('')
     try {
+      const permission = await window.zyroMedia?.requestAccess({ audio: true, video: Boolean(pendingCall.videoEnabled) })
+      if (permission && !permission.granted) throw new Error(permission.message)
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: Boolean(pendingCall.videoEnabled) })
       callStreamRef.current = stream
       setLocalVideoStream(stream)
@@ -6602,6 +6612,7 @@ function App() {
           </div>
         </section>
       )}
+      <audio ref={remoteAudioRef} autoPlay playsInline />
       {nutritionEditorOpen && (
         <div className="modal-backdrop" onClick={() => setNutritionEditorOpen(false)}>
           <section className="nutrition-editor-modal" role="dialog" aria-modal="true" aria-labelledby="nutrition-editor-title" onClick={(event) => event.stopPropagation()}>
@@ -10608,8 +10619,6 @@ function App() {
                 </span>
               </div>
               {callError && <p className="network-data-message" role="status">{callError}</p>}
-              <audio ref={remoteAudioRef} autoPlay />
-
               {callInfo && (
                 <div className="active-call-panel">
                   <strong>{callInfo.status === 'incoming' ? `Eingehender ${callInfo.videoEnabled ? 'Videoanruf' : 'Sprachanruf'} von ${callInfo.remoteUser.name}` : callInfo.remoteUser.name}</strong>

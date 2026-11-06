@@ -227,6 +227,8 @@ export default function SipSoftphone({ sessionToken, isAdmin }) {
     if (!userAgentRef.current || connectionState !== 'bereit' || sessionRef.current) return
     setError('')
     try {
+      const permission = await window.zyroMedia?.requestAccess({ audio: true })
+      if (permission && !permission.granted) throw new Error(permission.message)
       const target = UserAgent.makeURI(phoneDestination(destination, settings.sipUri))
       if (!target) throw new Error('Die Zieladresse konnte nicht erstellt werden.')
       const inviter = new Inviter(userAgentRef.current, target, {
@@ -245,6 +247,8 @@ export default function SipSoftphone({ sessionToken, isAdmin }) {
     if (!(invitation instanceof Invitation)) return
     setError('')
     try {
+      const permission = await window.zyroMedia?.requestAccess({ audio: true })
+      if (permission && !permission.granted) throw new Error(permission.message)
       await invitation.accept({ sessionDescriptionHandlerOptions: { constraints: { audio: true, video: false } } })
       setCallState('verbunden')
       attachRemoteAudio(invitation)

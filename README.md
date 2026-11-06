@@ -43,6 +43,7 @@ npm run desktop:pack:mac
 Im Ordner `release` entstehen DMG- und ZIP-Dateien für Intel- und Apple-Silicon-Macs. Die App benötigt macOS 14 (Sonoma) oder neuer, einschließlich Sonoma 14.8.9. Für die Verteilung außerhalb des eigenen Macs müssen App und Installer mit einem Apple-Developer-ID-Zertifikat signiert und notarisiert werden. Ohne Signierung kann macOS beim ersten Öffnen eine Sicherheitswarnung anzeigen.
 
 Die App-Daten liegen unter `~/Library/Application Support/Zyro Management`; Backups werden im Ordner `Dokumente/Zyro Management Backups` abgelegt.
+Beim ersten Telefonat fragt macOS nach Mikrofon- und bei Videoanrufen Kamerazugriff. Falls der Zugriff abgelehnt wurde, aktiviere Zyro unter **Systemeinstellungen → Datenschutz & Sicherheit → Mikrofon/Kamera** und starte den Anruf erneut.
 
 Alternativ kann GitHub den Installer über **Actions → Build macOS installer → Run workflow** auf einem Mac-Runner erstellen. Zuvor müssen die vollständigen Desktop-Quellen eingecheckt und in das Repository gepusht werden; `node_modules`, `dist` und `release` werden nicht benötigt. Zugangsdaten gehören nicht ins Repository: `.env` wird ignoriert, und der Workflow stoppt, falls die Datei beim Build vorhanden ist. Nach erfolgreichem Lauf lassen sich DMG und ZIP für 14 Tage unter **Actions → Build macOS installer → Artifacts** herunterladen. Zum Weitergeben per E-Mail besser einen Download-Link verwenden, da Installer-Dateien oft die Größenbeschränkung für E-Mail-Anhänge überschreiten.
 

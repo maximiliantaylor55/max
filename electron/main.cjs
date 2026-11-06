@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, net, protocol, safeStorage, session, shell } = require('electron')
+const { app, BrowserWindow, clipboard, dialog, ipcMain, net, protocol, safeStorage, session, shell, systemPreferences } = require('electron')
 const { autoUpdater } = require('electron-updater')
 const crypto = require('node:crypto')
 const fs = require('node:fs/promises')
@@ -3113,6 +3113,27 @@ const assertDesktopUpdatesSupported = () => {
 ipcMain.handle('zyro-updater:get-state', (event) => {
   assertTrustedFrame(event)
   return desktopUpdateState
+})
+
+ipcMain.handle('zyro-media:request-access', async (event, media = {}) => {
+  assertTrustedFrame(event)
+  const requestedMedia = []
+  if (media.audio === true) requestedMedia.push('microphone')
+  if (media.video === true) requestedMedia.push('camera')
+  if (!requestedMedia.length) throw new Error('Bitte Mikrofon oder Kamera für den Anruf auswählen.')
+  if (process.platform !== 'darwin') return { granted: true }
+
+  for (const device of requestedMedia) {
+    const granted = await systemPreferences.askForMediaAccess(device)
+    if (!granted) {
+      const deviceName = device === 'microphone' ? 'Mikrofon' : 'Kamera'
+      return {
+        granted: false,
+        message: `${deviceName}-Zugriff ist in macOS gesperrt. Aktiviere Zyro unter Systemeinstellungen → Datenschutz & Sicherheit → ${deviceName}.`,
+      }
+    }
+  }
+  return { granted: true }
 })
 
 ipcMain.handle('zyro-updater:check', async (event) => {
