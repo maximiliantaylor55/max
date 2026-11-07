@@ -157,7 +157,7 @@ Currently, two official plugins are available:
 
 ## Cloud-Sync und Anmeldung auf weiteren PCs
 
-Die gemeinsamen Benutzerkonten und App-Daten werden über die Firebase-Funktion `cloudData` (Firestore, komprimiert in `appDataChunks`) zwischen PCs abgeglichen. Der Abgleich läuft automatisch alle 30 Sekunden und kurz nach Änderungen; offline bleibt die lokale Arbeit verfügbar.
+Die gemeinsamen Benutzerkonten und App-Daten werden über die Firebase-Funktion `cloudData` (Firestore, komprimiert in `appDataChunks`) zwischen PCs abgeglichen. Der Abgleich läuft automatisch alle 10 Sekunden und kurz nach Änderungen; offline bleibt die lokale Arbeit verfügbar. Ein Fehler bei einem Datenbereich hält die übrigen nicht auf, und gleichzeitige Änderungen werden erneut abgeglichen.
 
 Gelöschte Datensätze, einschließlich Rezepturen, bleiben gelöscht: Beim Konfliktabgleich hat eine Löschung Vorrang vor einer veralteten Änderung auf einem anderen Gerät.
 

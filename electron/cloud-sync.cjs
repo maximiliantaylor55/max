@@ -46,7 +46,8 @@ const createCloudSync = ({
   let state = { enabled: false, lastSyncAt: '', lastError: '', revisions: {}, bases: {} }
   let timer = null
   let pushTimer = null
-  let running = false
+  let runningPromise = null
+  let rerunRequested = false
 
   try {
     state = { ...state, ...JSON.parse(fs.readFileSync(statePath, 'utf8')) }
@@ -108,7 +109,7 @@ const createCloudSync = ({
     }
   }
 
-  const syncKey = async (key, remoteRevision, token) => {
+  const syncKey = async (key, remoteRevision, token, conflictAttempt = 0) => {
     const knownRevision = state.revisions[key] || 0
     const local = readBusinessData()[key]
     const localJson = JSON.stringify(local ?? null)
@@ -137,29 +138,53 @@ const createCloudSync = ({
     }
 
     const result = await call({ action: 'put', key, baseRevision: pushRevision, data: encodeValue(pushValue) }, token)
-    if (result.conflict) return true
+    if (result.conflict) {
+      if (conflictAttempt >= 2) throw new Error('Der Cloud-Stand wurde mehrfach gleichzeitig geändert.')
+      return syncKey(key, Number(result.revision) || 0, token, conflictAttempt + 1)
+    }
     state.revisions[key] = result.revision
     state.bases[key] = JSON.stringify(pushValue ?? null)
     return true
   }
 
   const syncNow = async () => {
-    if (!state.enabled || running) return getStatus()
-    running = true
-    try {
-      const token = await getToken()
-      if (!token) throw new Error('Bitte zuerst das Admin-Token einrichten.')
-      const manifest = (await call({ action: 'manifest' }, token)).keys || {}
-      for (const key of keys) await syncKey(key, manifest[key]?.revision || 0, token)
-      state.lastSyncAt = new Date().toISOString()
-      state.lastError = ''
-    } catch (error) {
-      state.lastError = error.message
-    } finally {
-      running = false
-      saveState()
+    if (!state.enabled) return getStatus()
+    if (runningPromise) {
+      rerunRequested = true
+      return runningPromise
     }
-    return getStatus()
+    runningPromise = (async () => {
+      try {
+        do {
+          rerunRequested = false
+          const token = await getToken()
+          if (!token) throw new Error('Bitte zuerst das Admin-Token einrichten.')
+          const manifest = (await call({ action: 'manifest' }, token)).keys || {}
+          const errors = []
+          for (const key of keys) {
+            try {
+              await syncKey(key, manifest[key]?.revision || 0, token)
+            } catch (error) {
+              errors.push(`${key}: ${error.message}`)
+            }
+          }
+          if (errors.length > 0) {
+            const summary = errors.slice(0, 5).join(' | ')
+            state.lastError = errors.length > 5 ? `${summary} | und ${errors.length - 5} weitere Fehler` : summary
+          } else {
+            state.lastSyncAt = new Date().toISOString()
+            state.lastError = ''
+          }
+        } while (rerunRequested && state.enabled)
+      } catch (error) {
+        state.lastError = error.message
+      } finally {
+        runningPromise = null
+        saveState()
+      }
+      return getStatus()
+    })()
+    return runningPromise
   }
 
   const schedulePush = () => {
