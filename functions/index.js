@@ -39,6 +39,7 @@ const { validateElsterSetupEntries } = require('./elster-validation.cjs')
 const { validateCompanyDetailsEntries, defaultCompanyDetails } = require('./company-details.cjs')
 const { validateBottlerDetailsEntries } = require('./bottler-details.cjs')
 const { validateSalesDocumentEmail } = require('./sales-document-email.cjs')
+const { isAllowedInvoiceStatusChange, haveSameInvoiceFields } = require('./invoice-status.cjs')
 const {
   createScheduleRequest,
   filterScheduleRequestsForEmployee,
@@ -2228,13 +2229,6 @@ const validateWebAppWrite = (key, currentValue, nextValue, actor, allowScheduleR
   }
 
   if (key === 'zyro-sales-documents') {
-    const allowedStatusChanges = {
-      Entwurf: new Set(['Versendet', 'Storniert']),
-      Versendet: new Set(['Bezahlt', 'Überfällig', 'Storniert']),
-      Überfällig: new Set(['Bezahlt', 'Storniert']),
-      Bezahlt: new Set(['Storniert']),
-      Storniert: new Set(),
-    }
     const invoiceNumbers = new Set()
     for (const invoice of nextValue.filter((record) => record.kind === 'rechnung')) {
       const number = String(invoice.number || '').trim()
@@ -2245,16 +2239,8 @@ const validateWebAppWrite = (key, currentValue, nextValue, actor, allowScheduleR
         throw new Error('Neue Rechnungen müssen zuerst als Entwurf gespeichert werden.')
       }
       if (previous && previous.status !== 'Entwurf') {
-        const oldFields = { ...previous }
-        const nextFields = { ...invoice }
-        delete oldFields.status
-        delete nextFields.status
-        delete oldFields.emailedAt
-        delete nextFields.emailedAt
-        delete oldFields.portalPublishedAt
-        delete nextFields.portalPublishedAt
-        if (JSON.stringify(oldFields) !== JSON.stringify(nextFields)) throw new Error('Ausgestellte Rechnungen dürfen nicht geändert werden.')
-        if (invoice.status !== previous.status && !allowedStatusChanges[previous.status]?.has(invoice.status)) {
+        if (!haveSameInvoiceFields(previous, invoice)) throw new Error('Ausgestellte Rechnungen dürfen nicht geändert werden.')
+        if (!isAllowedInvoiceStatusChange(previous.status, invoice.status)) {
           throw new Error('Dieser Rechnungsstatuswechsel ist nicht zulässig.')
         }
       }

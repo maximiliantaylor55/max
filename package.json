@@ -1,7 +1,7 @@
 {
   "name": "zyro-programm",
   "private": true,
-  "version": "1.1.43",
+  "version": "1.1.44",
   "description": "Lokale Desktop-Anwendung für Getränkeproduktion und Verkaufsbelege",
   "author": "Liberty Street Food GmbH",
   "type": "module",
@@ -63,6 +63,7 @@
       "!dist/desktop-updates/**/*",
       "electron/**/*",
       "functions/finance-validation.cjs",
+      "functions/invoice-status.cjs",
       "functions/finance-receipt-validation.cjs",
       "functions/elster-validation.cjs",
       "functions/company-details.cjs",

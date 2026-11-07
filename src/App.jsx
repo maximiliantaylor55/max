@@ -19,6 +19,7 @@ import {
 import { calculateProductionCost } from './production-calculation.js'
 import {
   getScheduleToday,
+  getScheduleAssignees,
   getScheduleWeekDates,
   getScheduleWeekStart,
   sortScheduleShifts,
@@ -124,7 +125,7 @@ const defaultBusinessDpdMaxTrays = 6
 const salesDocumentStatuses = {
   angebot: ['Offen', 'Angenommen', 'Abgelehnt', 'Abgelaufen'],
   kundenauftrag: ['Offen', 'Bestätigt', 'In Produktion', 'Kommissionierung', 'Verpackt', 'Versendet', 'Abgeschlossen', 'Storniert'],
-  rechnung: ['Entwurf', 'Versendet', 'Bezahlt', 'Überfällig', 'Storniert'],
+  rechnung: ['Entwurf', 'Ausgestellt', 'Versendet', 'Bezahlt', 'Überfällig', 'Storniert'],
 }
 
 const ticketStatusLabels = {
@@ -2023,6 +2024,7 @@ function App() {
     scheduleWeekDayIds.has(shift.date)
     && (currentUser?.role === 'admin' || String(shift.employeeId) === String(currentUser?.id || ''))
   )))
+  const scheduleAssignees = getScheduleAssignees(users)
   const scheduleEmployees = users.filter((user) => user.role !== 'admin')
     .sort((left, right) => String(left.name).localeCompare(String(right.name), 'de'))
   const visibleScheduleRequests = scheduleRequests.filter((request) => (
@@ -2044,15 +2046,15 @@ function App() {
       setScheduleFeedback('Nur Admins dürfen den Dienstplan ändern.')
       return
     }
-    const employee = scheduleEmployees.find((user) => String(user.id) === String(scheduleShiftForm.employeeId))
-    if (!employee) {
-      setScheduleFeedback('Bitte einen gültigen Mitarbeiter auswählen.')
+    const assignee = scheduleAssignees.find((user) => String(user.id) === String(scheduleShiftForm.employeeId))
+    if (!assignee) {
+      setScheduleFeedback('Bitte eine gültige Person auswählen.')
       return
     }
     const shift = {
       id: editingScheduleShiftId || crypto.randomUUID(),
-      employeeId: String(employee.id),
-      employeeName: String(employee.name || '').trim(),
+      employeeId: String(assignee.id),
+      employeeName: String(assignee.name || '').trim(),
       date: scheduleShiftForm.date,
       startTime: scheduleShiftForm.startTime,
       endTime: scheduleShiftForm.endTime,
@@ -4276,7 +4278,7 @@ function App() {
         try {
           await window.zyroWebOrders.sendInvoice({ salesDocument: pdfDownload.salesDocument, html: pdfDownload.html }, authSessionToken)
           setSalesDocuments((current) => current.map((document) => document.id === pdfDownload.salesDocument.id
-            ? { ...document, status: 'Versendet', emailedAt: getCurrentTimestamp() }
+            ? { ...document, status: document.kind === 'rechnung' && !['Entwurf', 'Ausgestellt'].includes(document.status) ? document.status : 'Versendet', emailedAt: getCurrentTimestamp() }
             : document))
           setSalesFeedback(`${documentLabel} ${pdfDownload.salesDocument.number} wurde per E-Mail gesendet.`)
           emailButton.textContent = `${documentLabel} gesendet`
@@ -4594,7 +4596,25 @@ function App() {
         ? { paidAt: getPaymentDate().toISOString().slice(0, 10) }
         : {}),
     }
-    setSalesDocuments((current) => current.map((entry) => entry.id === salesDocumentId ? { ...entry, ...updates } : entry))
+    if (salesDocument.kind === 'rechnung' && status === 'Ausgestellt') {
+      const nextDocuments = salesDocuments.map((entry) => entry.id === salesDocument.id ? { ...entry, ...updates } : entry)
+      try {
+        if (window.zyroData) {
+          const result = await window.zyroData.set('zyro-sales-documents', nextDocuments, authSessionToken)
+          if (!result?.success) throw new Error(result?.message || 'Speichern fehlgeschlagen.')
+          sharedSyncSkipRef.current.add('zyro-sales-documents')
+        } else {
+          window.localStorage.setItem('zyro-sales-documents', JSON.stringify(nextDocuments))
+        }
+        setSalesDocuments(nextDocuments)
+        setSalesFeedback(`Rechnung ${salesDocument.number} wurde lokal festgeschrieben. Es wurde keine E-Mail versendet und kein Kundenportal-Eintrag erstellt.`)
+      } catch (error) {
+        setSalesFeedback(`Rechnung ${salesDocument.number} konnte nicht festgeschrieben werden: ${error.message}`)
+        return
+      }
+    } else {
+      setSalesDocuments((current) => current.map((entry) => entry.id === salesDocumentId ? { ...entry, ...updates } : entry))
+    }
     if (salesDocument.relatedOrderId) {
       setOrders((current) => current.map((order) => String(order.id) === String(salesDocument.relatedOrderId)
         ? { ...order, workflowHistory: [...(order.workflowHistory || []), createWorkflowEvent('Belegstatus geändert', `${salesDocument.number}: ${salesDocument.status} → ${status}`)] }
@@ -4602,22 +4622,14 @@ function App() {
     }
   }
 
-  const getSalesDocumentStatusOptions = (kind, status, documentId) => {
+  const getSalesDocumentStatusOptions = (kind, status) => {
     if (kind === 'kundenauftrag') {
       return status === 'Verpackt'
         ? [...salesDocumentStatuses.kundenauftrag, 'Verpackt']
         : salesDocumentStatuses.kundenauftrag
     }
     if (kind !== 'rechnung') return salesDocumentStatuses[kind]
-    const isExistingInvoice = salesDocuments.some((document) => document.id === documentId && document.kind === 'rechnung')
-    if (!isExistingInvoice) return ['Entwurf']
-    return {
-      Entwurf: ['Entwurf', 'Versendet', 'Storniert'],
-      Versendet: ['Versendet', 'Bezahlt', 'Überfällig', 'Storniert'],
-      Überfällig: ['Überfällig', 'Bezahlt', 'Storniert'],
-      Bezahlt: ['Bezahlt', 'Storniert'],
-      Storniert: ['Storniert'],
-    }[status] || [status]
+    return ['Entwurf']
   }
 
   const convertSalesDocument = (sourceDocument, targetKind) => {
@@ -5028,7 +5040,7 @@ function App() {
       }, authSessionToken)
       if (result?.sent === false) throw new Error(result.error || 'Der Mailserver hat den Versand nicht bestätigt.')
       setSalesDocuments((current) => current.map((document) => document.id === salesDocument.id
-        ? { ...document, status: 'Versendet', emailedAt: getCurrentTimestamp() }
+        ? { ...document, status: document.kind === 'rechnung' && !['Entwurf', 'Ausgestellt'].includes(document.status) ? document.status : 'Versendet', emailedAt: getCurrentTimestamp() }
         : document))
       setSalesFeedback(`${type.label} ${salesDocument.number} wurde an ${salesDocument.recipientEmail} versendet.`)
       await closeSalesDocumentDraftPreview()
@@ -7519,6 +7531,7 @@ function App() {
                           ? 'Mit Cloud verbunden'
                           : 'Cloud-Verbindung wird geprüft'}
                     </strong>
+                    {cloudStatus?.lastError && <small className="network-cloud-error">{cloudStatus.lastError}</small>}
                     {cloudStatus?.lastSyncAt && !cloudStatus.lastError && (
                       <small>Zuletzt {new Date(cloudStatus.lastSyncAt).toLocaleTimeString('de-DE')}</small>
                     )}
@@ -7956,22 +7969,24 @@ function App() {
                   <h2>{editingScheduleShiftId ? 'Schicht bearbeiten' : 'Schicht eintragen'}</h2>
                   <span>{scheduleShifts.length} Schichten</span>
                 </div>
-                {scheduleEmployees.length === 0 ? (
+                {scheduleAssignees.length === 0 ? (
                   <div className="schedule-empty-week">
-                    Bitte zuerst unter Admin Mitarbeiterkonten anlegen. Diese Konten können sich anschließend online anmelden.
+                    Bitte zuerst unter Admin ein Mitarbeiter- oder Admin-Konto anlegen. Dieses Konto kann anschließend für Schichten ausgewählt werden.
                   </div>
                 ) : (
                   <form className="form-grid" onSubmit={saveScheduleShift}>
                     <label className="full-width">
-                      Mitarbeiter
+                      Mitarbeiter oder Admin
                       <select
                         value={scheduleShiftForm.employeeId}
                         onChange={(event) => setScheduleShiftForm((current) => ({ ...current, employeeId: event.target.value }))}
                         required
                       >
                         <option value="">Mitarbeiter auswählen</option>
-                        {scheduleEmployees.map((employee) => (
-                          <option key={employee.id} value={employee.id}>{employee.name}{employee.username ? ` · ${employee.username}` : ''}</option>
+                        {scheduleAssignees.map((assignee) => (
+                          <option key={assignee.id} value={assignee.id}>
+                            {assignee.name}{assignee.role === 'admin' ? ' · Admin' : assignee.username ? ` · ${assignee.username}` : ''}
+                          </option>
                         ))}
                       </select>
                     </label>
@@ -10307,7 +10322,7 @@ function App() {
                 <label>
                   Status
                   <select value={salesDocumentForm.status} onChange={(event) => setSalesDocumentForm((current) => ({ ...current, status: event.target.value }))}>
-                    {getSalesDocumentStatusOptions(salesDocumentForm.kind, salesDocumentForm.status, editingSalesDocumentId).map((status) => <option key={status} value={status}>{status}</option>)}
+                    {getSalesDocumentStatusOptions(salesDocumentForm.kind, salesDocumentForm.status).map((status) => <option key={status} value={status}>{status}</option>)}
                   </select>
                 </label>
                 <label className="full-width">
@@ -10378,7 +10393,8 @@ function App() {
                         Status
                         <select value={salesDocument.status} onChange={(event) => updateSalesDocumentStatus(salesDocument.id, event.target.value)}>
                           {(salesDocument.kind === 'rechnung' ? {
-                            Entwurf: ['Entwurf', 'Versendet', 'Storniert'],
+                            Entwurf: ['Entwurf', 'Ausgestellt', 'Versendet', 'Storniert'],
+                            Ausgestellt: ['Ausgestellt', 'Versendet', 'Bezahlt', 'Überfällig', 'Storniert'],
                             Versendet: ['Versendet', 'Bezahlt', 'Überfällig', 'Storniert'],
                             Überfällig: ['Überfällig', 'Bezahlt', 'Storniert'],
                             Bezahlt: ['Bezahlt', 'Storniert'],

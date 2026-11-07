@@ -1,3 +1,5 @@
+import { readWebSyncState, writeWebSyncState } from './web-sync-state.js'
+
 const dataKeys = [
   'zyro-products',
   'zyro-recipes',
@@ -30,7 +32,6 @@ const dataKeys = [
   'zyro-shop-discounts',
 ]
 
-const syncStateKey = 'zyro-web-cloud-sync'
 const sessionStateKey = 'zyro-web-current-user'
 const sessionTokenKey = 'zyro-web-session-token'
 const archiveDocumentsKey = 'zyro-archive-documents'
@@ -210,10 +211,6 @@ const saveLocalValue = async (key, value) => {
   else writeJson(key, value)
 }
 
-const readSyncState = () => readJson(syncStateKey, { revisions: {}, bases: {} }) || { revisions: {}, bases: {} }
-
-const writeSyncState = (state) => window.localStorage.setItem(syncStateKey, JSON.stringify(state))
-
 const recordId = (key, record) => String(key === 'zyro-inventory' ? record?.item ?? JSON.stringify(record) : record?.id ?? JSON.stringify(record))
 
 const mergeRecords = (key, base, local, remote) => {
@@ -250,8 +247,8 @@ const syncCloudData = async (force = false, requestedKeys = null) => {
   lastSyncAt = Date.now()
   const syncErrors = []
   try {
-    const state = readSyncState()
     if (!await archiveDocumentsReady) throw new Error('Der lokale Archivspeicher ist nicht verfügbar; Cloud-Synchronisierung wurde angehalten, damit keine Dokumente verloren gehen.')
+    const state = await readWebSyncState(archiveDatabase, window.localStorage)
     const userId = String(readCachedUser()?.id || '')
     const previousUserId = window.localStorage.getItem('zyro-web-sync-user-id')
     if (userId && previousUserId !== userId) {
@@ -402,7 +399,7 @@ const syncCloudData = async (force = false, requestedKeys = null) => {
         throw error
       }
     }
-    writeSyncState(state)
+    await writeWebSyncState(archiveDatabase, state)
     if (syncErrors.length > 0) {
       emit('zyro-data-sync-error', { message: syncErrors.join(' ') })
     } else {

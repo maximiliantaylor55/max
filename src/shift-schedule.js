@@ -36,6 +36,10 @@ export const sortScheduleShifts = (shifts) => [...shifts].sort((left, right) => 
   || String(left.employeeName || '').localeCompare(String(right.employeeName || ''), 'de')
 ))
 
+export const getScheduleAssignees = (users) => (Array.isArray(users) ? [...users] : [])
+  .filter((user) => user?.role === 'admin' || user?.role === 'mitarbeiter')
+  .sort((left, right) => String(left.name).localeCompare(String(right.name), 'de'))
+
 export const validateShiftDraft = (shift, shifts, editingId = '') => {
   if (!shift.employeeId || !shift.employeeName || !datePattern.test(shift.date)
     || Number.isNaN(Date.parse(`${shift.date}T00:00:00.000Z`))

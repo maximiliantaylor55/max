@@ -714,6 +714,14 @@
   opacity: 0.8;
 }
 
+.network-cloud-status .network-cloud-error {
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .network-cloud-status-dot {
   flex: 0 0 9px;
   width: 9px;

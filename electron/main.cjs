@@ -10,6 +10,7 @@ const { pathToFileURL } = require('node:url')
 const { WebSocket, WebSocketServer } = require('ws')
 const { getOrCreateBootstrapKey, removeBootstrapKey } = require('./activation-key.cjs')
 const { createCloudSync } = require('./cloud-sync.cjs')
+const { isAllowedInvoiceStatusChange, haveSameInvoiceFields } = require('../functions/invoice-status.cjs')
 const { validateFinanceEntries } = require('../functions/finance-validation.cjs')
 const { validatePurchaseOrders, validateSuppliers } = require('../functions/erp-purchasing.cjs')
 const { validateElsterSetupEntries } = require('../functions/elster-validation.cjs')
@@ -483,14 +484,6 @@ const validateIssuedInvoices = (currentValue, nextValue, actor = null) => {
   const nextById = new Map(nextValue.map((record) => [String(record.id), record]))
   const currentById = new Map((Array.isArray(currentValue) ? currentValue : []).map((record) => [String(record.id), record]))
   const invoiceNumbers = new Set()
-  const allowedStatusChanges = {
-    Entwurf: new Set(['Versendet', 'Storniert']),
-    Versendet: new Set(['Bezahlt', 'Überfällig', 'Storniert']),
-    Überfällig: new Set(['Bezahlt', 'Storniert']),
-    Bezahlt: new Set(['Storniert']),
-    Storniert: new Set(),
-  }
-
   for (const invoice of nextValue.filter((record) => record.kind === 'rechnung')) {
     const invoiceNumber = String(invoice.number || '').trim()
     if (!invoiceNumber || invoiceNumbers.has(invoiceNumber)) throw new Error('Jede Rechnung benötigt eine eindeutige Rechnungsnummer.')
@@ -520,19 +513,11 @@ const validateIssuedInvoices = (currentValue, nextValue, actor = null) => {
     }
     if (invoice.status === 'Entwurf' && nextInvoice.status === 'Entwurf') continue
 
-    const originalFields = { ...invoice }
-    const updatedFields = { ...nextInvoice }
-    delete originalFields.status
-    delete updatedFields.status
-    delete originalFields.emailedAt
-    delete updatedFields.emailedAt
-    delete originalFields.portalPublishedAt
-    delete updatedFields.portalPublishedAt
-    if (JSON.stringify(originalFields) !== JSON.stringify(updatedFields)) {
+    if (!haveSameInvoiceFields(invoice, nextInvoice)) {
       throw new Error(`Ausgestellte Rechnung ${invoice.number || ''} ist unveränderlich. Bitte einen Storno- oder Korrekturbeleg erstellen.`)
     }
 
-    if (nextInvoice.status !== invoice.status && !allowedStatusChanges[invoice.status]?.has(nextInvoice.status)) {
+    if (!isAllowedInvoiceStatusChange(invoice.status, nextInvoice.status)) {
       throw new Error(`Der Rechnungsstatus ${invoice.status || 'unbekannt'} kann nicht auf ${nextInvoice.status || 'unbekannt'} geändert werden.`)
     }
   }

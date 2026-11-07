@@ -1,12 +1,22 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  getScheduleAssignees,
   getScheduleToday,
   getScheduleWeekDates,
   getScheduleWeekStart,
   sortScheduleShifts,
   validateShiftDraft,
 } from './shift-schedule.js'
+
+test('allows admins and employees to be assigned to shifts', () => {
+  const users = [
+    { id: 'employee-1', name: 'Birgit', role: 'mitarbeiter' },
+    { id: 'admin-1', name: 'Anna', role: 'admin' },
+    { id: 'other-1', name: 'Ignored', role: 'external' },
+  ]
+  assert.deepEqual(getScheduleAssignees(users).map((user) => user.id), ['admin-1', 'employee-1'])
+})
 
 test('formats a schedule date using the local calendar day', () => {
   assert.equal(getScheduleToday(new Date(2026, 10, 9)), '2026-11-09')
