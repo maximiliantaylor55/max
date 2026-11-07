@@ -3152,7 +3152,22 @@ ipcMain.handle('zyro-printer:print-html', async (event, html, printerName = '', 
   if (typeof html !== 'string' || !html.startsWith('<!doctype html>') || html.length > 2_000_000) {
     throw new Error('Druckinhalt ist ungültig oder zu groß.')
   }
-  if (!['A4', 'label'].includes(pageSize)) throw new Error('Papierformat wird nicht unterstützt.')
+  let normalizedPageSize
+  if (pageSize === 'A4') {
+    normalizedPageSize = 'A4'
+  } else if (pageSize === 'label') {
+    normalizedPageSize = { width: 100000, height: 150000 }
+  } else if (pageSize && typeof pageSize === 'object') {
+    const widthMm = Number(pageSize.width)
+    const heightMm = Number(pageSize.height)
+    if (!Number.isFinite(widthMm) || !Number.isFinite(heightMm)
+      || widthMm < 20 || widthMm > 500 || heightMm < 20 || heightMm > 500) {
+      throw new Error('Etikettenformat muss zwischen 20 und 500 mm liegen.')
+    }
+    normalizedPageSize = { width: Math.round(widthMm * 1000), height: Math.round(heightMm * 1000) }
+  } else {
+    throw new Error('Papierformat wird nicht unterstützt.')
+  }
   const selectedPrinter = String(printerName || '')
   if (selectedPrinter) {
     const printers = await event.sender.getPrintersAsync()
@@ -3176,7 +3191,7 @@ ipcMain.handle('zyro-printer:print-html', async (event, html, printerName = '', 
       const options = {
         silent: true,
         printBackground: true,
-        pageSize: pageSize === 'label' ? { width: 100000, height: 150000 } : 'A4',
+        pageSize: normalizedPageSize,
         ...(selectedPrinter ? { deviceName: selectedPrinter } : {}),
       }
       printWindow.webContents.print(options, (success, failureReason) => {

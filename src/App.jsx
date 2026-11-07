@@ -434,7 +434,7 @@ const initialCustomerForm = {
   paymentMethod: '',
   notes: '',
 }
-const initialSalesDocumentForm = { kind: 'angebot', customerId: '', recipient: '', recipientEmail: '', recipientAddress: '', lotNumber: '', relatedOrderId: '', items: [{ productId: '', quantity: '1', unitPrice: '' }], vatRate: '19', documentDate: new Date().toISOString().slice(0, 10), dueDate: '', paymentMethod: 'Vorkasse', customPaymentMethod: '', shippingMethod: 'DPD Paket', customShippingMethod: '', notes: '', status: 'Offen' }
+const initialSalesDocumentForm = { kind: 'angebot', customerId: '', recipient: '', recipientEmail: '', recipientAddress: '', lotNumber: '', relatedOrderId: '', items: [{ productId: '', customName: '', quantity: '1', unitPrice: '' }], vatRate: '19', documentDate: new Date().toISOString().slice(0, 10), dueDate: '', paymentMethod: 'Vorkasse', customPaymentMethod: '', shippingMethod: 'DPD Paket', customShippingMethod: '', notes: '', status: 'Offen' }
 const createReportDraft = (userName = '') => ({
   title: '',
   type: 'Qualitätsbericht',
@@ -3969,6 +3969,12 @@ function App() {
     setScannedOrder(order)
   }
 
+  const printHtmlOnDesktop = async (html, pageSize = 'A4') => {
+    if (!window.zyroPrinter?.printHtml) return false
+    await window.zyroPrinter.printHtml(html, selectedDesktopPrinter, pageSize)
+    return true
+  }
+
   const showPrintPreview = (printWindow, pdfDownload = null) => {
     const style = printWindow.document.createElement('style')
     style.textContent = `
@@ -3987,7 +3993,18 @@ function App() {
     const printButton = printWindow.document.createElement('button')
     printButton.type = 'button'
     printButton.textContent = 'Drucken'
-    printButton.addEventListener('click', () => printWindow.print())
+    printButton.addEventListener('click', async () => {
+      printButton.disabled = true
+      try {
+        const pageSize = pdfDownload?.pageSizeMm || 'A4'
+        const printed = await printHtmlOnDesktop(printWindow.document.documentElement.outerHTML, pageSize)
+        if (!printed) printWindow.print()
+      } catch (error) {
+        window.alert(`Drucken fehlgeschlagen: ${error.message}`)
+      } finally {
+        printButton.disabled = false
+      }
+    })
 
     if (pdfDownload && window.zyroData?.exportMonthlyInvoicesPdf) {
       const downloadButton = printWindow.document.createElement('button')
@@ -4131,31 +4148,38 @@ function App() {
     showPrintPreview(printWindow)
   }
 
+  const buildSalesDocumentItems = (previousItems = []) => salesDocumentForm.items.map((line) => {
+    const product = line.productId && line.productId !== '__custom__'
+      ? products.find((entry) => String(entry.id) === String(line.productId))
+        || previousItems.find((entry) => String(entry.productId) === String(line.productId))
+      : null
+    const productName = product
+      ? product.name || product.productName || ''
+      : String(line.customName || '').trim()
+    if (!productName) return null
+
+    const productSku = product?.sku || product?.productSku || ''
+    const productCategory = product?.category || product?.productCategory || ''
+    const productVolume = product?.volume || product?.productVolume || ''
+
+    return {
+      productId: product ? product.id ?? product.productId : '',
+      productName,
+      productSku,
+      productCategory,
+      productVolume,
+      description: product
+        ? [productName, productSku, productCategory, productVolume].filter(Boolean).join(' · ')
+        : productName,
+      quantity: Number(line.quantity),
+      unitPrice: Number(line.unitPrice),
+    }
+  })
+
   const addSalesDocument = async (event) => {
     event.preventDefault()
     const existingDocument = salesDocuments.find((entry) => entry.id === editingSalesDocumentId)
-    const previousItems = getSalesDocumentItems(existingDocument)
-    const items = salesDocumentForm.items.map((line) => {
-      const product = products.find((entry) => String(entry.id) === String(line.productId))
-        || previousItems.find((entry) => String(entry.productId) === String(line.productId))
-      if (!product) return null
-
-      const productName = product.name || product.productName || ''
-      const productSku = product.sku || product.productSku || ''
-      const productCategory = product.category || product.productCategory || ''
-      const productVolume = product.volume || product.productVolume || ''
-
-      return {
-        productId: product.id ?? product.productId,
-        productName,
-        productSku,
-        productCategory,
-        productVolume,
-        description: [productName, productSku, productCategory, productVolume].filter(Boolean).join(' · '),
-        quantity: Number(line.quantity),
-        unitPrice: Number(line.unitPrice),
-      }
-    })
+    const items = buildSalesDocumentItems(getSalesDocumentItems(existingDocument))
     if (!salesDocumentForm.recipient.trim() || items.length === 0 || items.some((item) => !item || item.quantity <= 0 || item.unitPrice < 0)) return
 
     const existingCustomer = customerOptions.find((customer) =>
@@ -4259,24 +4283,8 @@ function App() {
       setSalesFeedback('Bitte wähle eine gültige Belegart aus.')
       return
     }
-    const items = salesDocumentForm.items.map((line) => {
-      const product = products.find((entry) => String(entry.id) === String(line.productId))
-      if (!product) return null
-      const productName = product.name || product.productName || ''
-      const productSku = product.sku || product.productSku || ''
-      const productCategory = product.category || product.productCategory || ''
-      const productVolume = product.volume || product.productVolume || ''
-      return {
-        productId: product.id ?? product.productId,
-        productName,
-        productSku,
-        productCategory,
-        productVolume,
-        description: [productName, productSku, productCategory, productVolume].filter(Boolean).join(' · '),
-        quantity: Number(line.quantity),
-        unitPrice: Number(line.unitPrice),
-      }
-    })
+    const existingDocument = salesDocuments.find((entry) => entry.id === editingSalesDocumentId)
+    const items = buildSalesDocumentItems(getSalesDocumentItems(existingDocument))
     if (!salesDocumentForm.recipient.trim() || items.length === 0 || items.some((item) => !item || item.quantity <= 0 || item.unitPrice < 0)) {
       setSalesFeedback('Bitte Empfänger, mindestens ein Produkt sowie gültige Mengen und Preise eintragen, bevor du die Vorschau öffnest.')
       return
@@ -4286,7 +4294,6 @@ function App() {
       salesDocumentPreviewIdRef.current = null
     }
     const documentDate = salesDocumentForm.documentDate || getCurrentTimestamp().slice(0, 10)
-    const existingDocument = salesDocuments.find((entry) => entry.id === editingSalesDocumentId)
     const previewDocument = {
       ...existingDocument,
       id: existingDocument?.id || 'sales-document-preview',
@@ -4334,7 +4341,8 @@ function App() {
       recipientEmail: salesDocument.recipientEmail || '',
       recipientAddress: salesDocument.recipientAddress || '',
       items: getSalesDocumentItems(salesDocument).map((item) => ({
-        productId: String(item.productId ?? ''),
+        productId: item.productId ? String(item.productId) : (item.productName || item.description ? '__custom__' : ''),
+        customName: item.productId ? '' : item.productName || item.description || '',
         quantity: String(item.quantity ?? 1),
         unitPrice: String(item.unitPrice ?? ''),
       })),
@@ -4641,9 +4649,9 @@ function App() {
     }
   }
 
-  const printPickingList = (salesDocument) => {
-    const printWindow = window.open('', '_blank')
-    if (!printWindow) return
+  const printPickingList = async (salesDocument) => {
+    const printWindow = window.zyroPrinter?.printHtml ? null : window.open('', '_blank')
+    if (!window.zyroPrinter?.printHtml && !printWindow) return
     const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     })[character])
@@ -4671,10 +4679,19 @@ function App() {
       body{font:13px Arial,sans-serif;color:#111;margin:18mm}h1{margin:0 0 4px;font-size:22px}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border-bottom:1px solid #bbb;padding:8px;text-align:left;vertical-align:middle}.qty{font-size:18px;font-weight:700;text-align:center}.box{width:22px}.box:before{content:"";display:block;width:16px;height:16px;border:2px solid #111}.bc svg{height:36px;max-width:170px}small{color:#555}
       </style></head><body><h1>Kommissionierliste</h1><div><strong>Auftrag:</strong> ${escapeHtml(salesDocument.number)} · <strong>Empfänger:</strong> ${escapeHtml(salesDocument.recipient)}</div><div><strong>Datum:</strong> ${escapeHtml(salesDocument.documentDate || '')}</div>
       <table><thead><tr><th></th><th>Artikel</th><th>Menge</th><th>EAN-13</th></tr></thead><tbody>${rows}</tbody></table></body></html>`
-    printWindow.document.open()
-    printWindow.document.write(html)
-    printWindow.document.close()
-    window.setTimeout(() => printWindow.print(), 350)
+    if (window.zyroPrinter?.printHtml) {
+      try {
+        await printHtmlOnDesktop(html)
+        setMdeMessage(`Kommissionierliste für ${salesDocument.number} an ${selectedDesktopPrinter || 'den Standarddrucker'} gesendet.`)
+      } catch (error) {
+        setMdeMessage(`Kommissionierliste konnte nicht gedruckt werden: ${error.message}`)
+      }
+    } else {
+      printWindow.document.open()
+      printWindow.document.write(html)
+      printWindow.document.close()
+      window.setTimeout(() => printWindow.print(), 350)
+    }
   }
 
   const printSalesDocument = async (salesDocument, sendEmail = false, publishToPortal = false, previewOptions = {}) => {
@@ -9630,26 +9647,49 @@ function App() {
                   </label>
                 )}
                 {salesDocumentForm.items.map((item, index) => (
-                  <div className="sales-line full-width" key={`${index}-${item.productId}`}>
-                    <label>
-                      Leistung / Produkt
-                      <select
-                        value={item.productId}
-                        onChange={(event) => {
-                          const product = products.find((entry) => String(entry.id) === event.target.value)
-                          setSalesDocumentForm((current) => ({
+                  <div className="sales-line full-width" key={index}>
+                    {item.productId === '__custom__' ? (
+                      <label>
+                        Freier Artikel / Leistung
+                        <input
+                          type="text"
+                          value={item.customName}
+                          onChange={(event) => setSalesDocumentForm((current) => ({
                             ...current,
-                            items: current.items.map((line, lineIndex) => lineIndex === index
-                              ? { ...line, productId: event.target.value, unitPrice: product?.unitPrice ? String(product.unitPrice) : '' }
-                              : line),
-                          }))
-                        }}
-                        required
-                      >
-                        <option value="">Produkt auswählen</option>
-                        {products.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.sku} · {product.volume}</option>)}
-                      </select>
-                    </label>
+                            items: current.items.map((line, lineIndex) => lineIndex === index ? { ...line, customName: event.target.value } : line),
+                          }))}
+                          placeholder="Artikel oder Leistung eingeben"
+                          maxLength={200}
+                          required
+                        />
+                      </label>
+                    ) : (
+                      <label>
+                        Leistung / Produkt
+                        <select
+                          value={item.productId}
+                          onChange={(event) => {
+                            const product = products.find((entry) => String(entry.id) === event.target.value)
+                            setSalesDocumentForm((current) => ({
+                              ...current,
+                              items: current.items.map((line, lineIndex) => lineIndex === index
+                                ? {
+                                  ...line,
+                                  productId: event.target.value,
+                                  customName: event.target.value === '__custom__' ? line.customName : '',
+                                  unitPrice: product?.unitPrice != null ? String(product.unitPrice) : line.unitPrice,
+                                }
+                                : line),
+                            }))
+                          }}
+                          required
+                        >
+                          <option value="">Produkt auswählen</option>
+                          {products.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.sku} · {product.volume}</option>)}
+                          <option value="__custom__">Freien Artikel eingeben…</option>
+                        </select>
+                      </label>
+                    )}
                     <label>
                       Menge
                       <input type="number" min="0.01" step="0.01" value={item.quantity} onChange={(event) => setSalesDocumentForm((current) => ({
@@ -9685,7 +9725,7 @@ function App() {
                   className="secondary-button full-width-button"
                   onClick={() => setSalesDocumentForm((current) => ({
                     ...current,
-                    items: [...current.items, { productId: '', quantity: '1', unitPrice: '' }],
+                    items: [...current.items, { productId: '', customName: '', quantity: '1', unitPrice: '' }],
                   }))}
                 >
                   Position hinzufügen
