@@ -18,6 +18,7 @@ import {
 } from './erp-accounting.js'
 import { calculateProductionCost } from './production-calculation.js'
 import {
+  getScheduleToday,
   getScheduleWeekDates,
   getScheduleWeekStart,
   sortScheduleShifts,
@@ -176,7 +177,7 @@ const seedInventory = [
   { item: 'Wasser', stock: 93, ideal: 85, status: 'Gut' },
 ]
 
-const baseTabs = ['dashboard', 'tickets', 'telefon', 'dokumente', 'etiketten', 'produkte', 'rezepturen', 'bestellungen', 'verkauf', 'kunden', 'analyse', 'lager', 'mde', 'versand', 'chargen', 'einkauf']
+const baseTabs = ['dashboard', 'tickets', 'telefon', 'dokumente', 'etiketten', 'produkte', 'rezepturen', 'bestellungen', 'verkauf', 'kunden', 'analyse', 'lager', 'mde', 'versand', 'einkauf']
 const financeCategories = {
   income: ['Warenverkauf', 'Sonstige Einnahmen', 'Erstattungen'],
   expense: ['Wareneinkauf', 'Verpackung und Versand', 'Miete und Nebenkosten', 'Telefon und Internet', 'Marketing', 'Fahrtkosten', 'Gebühren', 'Versicherungen', 'Büro und Verwaltung', 'Sonstige Betriebsausgaben'],
@@ -219,6 +220,27 @@ const createScheduleShiftForm = () => ({
   location: '',
   notes: '',
 })
+const createScheduleRequestForm = () => ({
+  type: 'shift_swap',
+  shiftId: '',
+  targetEmployeeId: '',
+  startDate: getScheduleToday(),
+  endDate: getScheduleToday(),
+  note: '',
+})
+const scheduleRequestStatusLabels = {
+  pending_coworker: 'Wartet auf Zustimmung des Tauschpartners',
+  pending_admin: 'Wartet auf Admin-Entscheidung',
+  approved: 'Genehmigt',
+  declined: 'Abgelehnt',
+  declined_by_coworker: 'Vom Tauschpartner abgelehnt',
+}
+const scheduleRequestTypeLabels = {
+  shift_swap: 'Schichttausch',
+  vacation: 'Urlaub',
+  sick_leave: 'Krankmeldung',
+  other_absence: 'Sonstige Abwesenheit',
+}
 const createPaymentRequestForm = () => ({
   clientName: '',
   recipientName: '',
@@ -310,7 +332,6 @@ const permissionLabels = {
   lager: 'Lager',
   mde: 'MDE · Scanner',
   versand: 'Versand & Tracking',
-  chargen: 'Chargen',
   maschinenbau: 'Maschinenbau',
 }
 
@@ -659,6 +680,14 @@ const playIncomingNotificationSound = () => {
 
 const writeStorage = (key, value, sessionToken) => {
   if (typeof window === 'undefined') return
+  if (key === 'zyro-archive-documents') {
+    window.zyroData?.set(key, value, sessionToken)
+      .then((result) => {
+        if (result?.success === false) window.dispatchEvent(new CustomEvent('zyro-data-write-error', { detail: { message: result.message, key } }))
+      })
+      .catch((error) => window.dispatchEvent(new CustomEvent('zyro-data-write-error', { detail: { message: error.message, key } })))
+    return
+  }
   try {
     window.localStorage.setItem(key, JSON.stringify(value))
   } catch {
@@ -775,10 +804,16 @@ function App() {
   const [adjustMessage, setAdjustMessage] = useState('')
   const [reports, setReports] = useState(() => readStorage('zyro-reports', []))
   const [scheduleShifts, setScheduleShifts] = useState(() => readStorage('zyro-schedule', []))
+  const [scheduleRequests, setScheduleRequests] = useState(() => readStorage('zyro-schedule-requests', []))
   const [scheduleWeekStart, setScheduleWeekStart] = useState(() => getScheduleWeekStart())
+  const [scheduleToday] = useState(() => getScheduleToday())
   const [scheduleShiftForm, setScheduleShiftForm] = useState(createScheduleShiftForm)
+  const [scheduleRequestForm, setScheduleRequestForm] = useState(createScheduleRequestForm)
   const [editingScheduleShiftId, setEditingScheduleShiftId] = useState('')
   const [scheduleFeedback, setScheduleFeedback] = useState('')
+  const [scheduleRequestFeedback, setScheduleRequestFeedback] = useState('')
+  const [scheduleDecisionNotes, setScheduleDecisionNotes] = useState({})
+  const [scheduleRequestBusyId, setScheduleRequestBusyId] = useState('')
   const [machinebauRecords, setMachinebauRecords] = useState(() => readStorage('zyro-machinebau', []))
   const [machinebauDraft, setMachinebauDraft] = useState(null)
   const [editingMachinebauId, setEditingMachinebauId] = useState('')
@@ -910,7 +945,6 @@ function App() {
   const [editingSalesDocumentId, setEditingSalesDocumentId] = useState(null)
   const [salesFeedback, setSalesFeedback] = useState('')
   const backupInputRef = useRef(null)
-  const [qualityDrafts, setQualityDrafts] = useState({})
   const [inventoryForm, setInventoryForm] = useState(initialInventoryForm)
   const [mdeReceipt, setMdeReceipt] = useState(initialMdeReceipt)
   const [mdeMessage, setMdeMessage] = useState('')
@@ -1034,6 +1068,7 @@ function App() {
   const persistCollection = (key, value, sessionToken) => {
     if (!networkSyncReadyRef.current || !sessionToken) return
     if (sharedSyncSkipRef.current.delete(key)) {
+      if (key === 'zyro-archive-documents') return
       try {
         window.localStorage.setItem(key, JSON.stringify(value))
       } catch {
@@ -1304,6 +1339,7 @@ function App() {
       'zyro-reports': setReports,
       'zyro-machinebau': setMachinebauRecords,
       'zyro-schedule': setScheduleShifts,
+      'zyro-schedule-requests': setScheduleRequests,
       'zyro-hr-sensitive': setHrSensitiveRecords,
       'zyro-archive-documents': setUploadedDocuments,
       'zyro-orders': setOrders,
@@ -1500,6 +1536,10 @@ function App() {
   }, [scheduleShifts, authSessionToken, currentUser?.role])
 
   useEffect(() => {
+    if (currentUser?.role === 'admin') persistCollection('zyro-schedule-requests', scheduleRequests, authSessionToken)
+  }, [scheduleRequests, authSessionToken, currentUser?.role])
+
+  useEffect(() => {
     persistCollection('zyro-machinebau', machinebauRecords, authSessionToken)
   }, [machinebauRecords, authSessionToken])
 
@@ -1628,6 +1668,7 @@ function App() {
       'zyro-machinebau': setMachinebauRecords,
       'zyro-hr-sensitive': setHrSensitiveRecords,
       'zyro-archive-documents': setUploadedDocuments,
+      'zyro-schedule-requests': setScheduleRequests,
       'zyro-website-orders': setWebsiteOrders,
       'zyro-customers': setCustomers,
       'zyro-inventory': setInventory,
@@ -1657,6 +1698,7 @@ function App() {
       'zyro-stock-movements': [],
       'zyro-reports': [],
       'zyro-schedule': [],
+      'zyro-schedule-requests': [],
       'zyro-machinebau': [],
       'zyro-hr-sensitive': [],
       'zyro-archive-documents': [],
@@ -1983,6 +2025,15 @@ function App() {
   )))
   const scheduleEmployees = users.filter((user) => user.role !== 'admin')
     .sort((left, right) => String(left.name).localeCompare(String(right.name), 'de'))
+  const visibleScheduleRequests = scheduleRequests.filter((request) => (
+    currentUser?.role === 'admin'
+    || String(request.requesterId) === String(currentUser?.id || '')
+    || String(request.targetEmployeeId || '') === String(currentUser?.id || '')
+  ))
+  const requestableScheduleShifts = scheduleShifts.filter((shift) => (
+    String(shift.employeeId) === String(currentUser?.id || '')
+    && shift.date >= scheduleToday
+  ))
   const scheduleWeekLabel = scheduleWeekDays.length
     ? `${new Intl.DateTimeFormat('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(`${scheduleWeekDays[0].date}T12:00:00`))} – ${new Intl.DateTimeFormat('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(`${scheduleWeekDays[6].date}T12:00:00`))}`
     : ''
@@ -2046,6 +2097,109 @@ function App() {
       setScheduleShiftForm(createScheduleShiftForm())
     }
     setScheduleFeedback('Schicht wurde gelöscht.')
+  }
+
+  const submitScheduleRequest = async (event) => {
+    event.preventDefault()
+    setScheduleRequestFeedback('')
+    try {
+      if (!window.zyroData?.createScheduleRequest) {
+        throw new Error('Dienstplan-Anträge können nur online unter /schichtplan eingereicht werden.')
+      }
+      await window.zyroData.createScheduleRequest({
+        type: scheduleRequestForm.type,
+        shiftId: scheduleRequestForm.shiftId,
+        targetEmployeeId: scheduleRequestForm.targetEmployeeId,
+        startDate: scheduleRequestForm.startDate,
+        endDate: scheduleRequestForm.endDate,
+        note: scheduleRequestForm.note.trim(),
+      })
+      setScheduleRequestForm(createScheduleRequestForm())
+      setScheduleRequestFeedback('Dein Antrag wurde übermittelt.')
+    } catch (error) {
+      setScheduleRequestFeedback(`Antrag konnte nicht übermittelt werden: ${error.message}`)
+    }
+  }
+
+  const respondToScheduleRequest = async (request, response) => {
+    setScheduleRequestFeedback('')
+    setScheduleRequestBusyId(request.id)
+    try {
+      if (!window.zyroData?.respondScheduleRequest) {
+        throw new Error('Tauschanfragen können nur online unter /schichtplan beantwortet werden.')
+      }
+      await window.zyroData.respondScheduleRequest({
+        requestId: request.id,
+        response,
+        targetShiftId: response === 'accept' ? scheduleDecisionNotes[`shift:${request.id}`] : '',
+      })
+      setScheduleRequestFeedback(response === 'accept' ? 'Tausch angenommen und zur Admin-Freigabe weitergeleitet.' : 'Tauschanfrage abgelehnt.')
+    } catch (error) {
+      setScheduleRequestFeedback(`Antwort konnte nicht gespeichert werden: ${error.message}`)
+    } finally {
+      setScheduleRequestBusyId('')
+    }
+  }
+
+  const decideScheduleRequest = async (request, decision) => {
+    setScheduleRequestFeedback('')
+    setScheduleRequestBusyId(request.id)
+    try {
+      const decidedAt = new Date().toISOString()
+      const updatedRequest = {
+        ...request,
+        status: decision,
+        updatedAt: decidedAt,
+        adminDecidedAt: decidedAt,
+        adminDecidedBy: String(currentUser?.name || ''),
+        decisionNote: String(scheduleDecisionNotes[request.id] || '').trim(),
+      }
+      let updatedSchedule = scheduleShifts
+      if (decision === 'approved' && request.type === 'shift_swap') {
+        const firstShift = scheduleShifts.find((shift) => String(shift.id) === String(request.shiftId))
+        const secondShift = scheduleShifts.find((shift) => String(shift.id) === String(request.targetShiftId))
+        if (!firstShift || !secondShift
+          || String(firstShift.employeeId) !== String(request.requesterId)
+          || String(secondShift.employeeId) !== String(request.targetEmployeeId)) {
+          throw new Error('Die zu tauschenden Schichten sind nicht mehr gültig.')
+        }
+        updatedSchedule = scheduleShifts.map((shift) => {
+          if (String(shift.id) === String(firstShift.id)) {
+            return { ...shift, employeeId: secondShift.employeeId, employeeName: secondShift.employeeName }
+          }
+          if (String(shift.id) === String(secondShift.id)) {
+            return { ...shift, employeeId: firstShift.employeeId, employeeName: firstShift.employeeName }
+          }
+          return shift
+        })
+        for (const shiftId of [firstShift.id, secondShift.id]) {
+          const draft = updatedSchedule.find((shift) => String(shift.id) === String(shiftId))
+          const validationMessage = validateShiftDraft(draft, updatedSchedule, draft.id)
+          if (validationMessage) throw new Error(`Tausch nicht möglich: ${validationMessage}`)
+        }
+      }
+      const updatedRequests = scheduleRequests.map((entry) => entry.id === request.id ? updatedRequest : entry)
+      const scheduleChanged = JSON.stringify(updatedSchedule) !== JSON.stringify(scheduleShifts)
+      if (scheduleChanged) {
+        const scheduleResult = await window.zyroData?.set('zyro-schedule', updatedSchedule, authSessionToken)
+        if (!scheduleResult?.success) throw new Error(scheduleResult?.message || 'Der Dienstplan konnte nicht aktualisiert werden.')
+      }
+      const requestResult = await window.zyroData?.set('zyro-schedule-requests', updatedRequests, authSessionToken)
+      if (!requestResult?.success) {
+        if (scheduleChanged) {
+          const rollback = await window.zyroData?.set('zyro-schedule', scheduleShifts, authSessionToken)
+          if (!rollback?.success) throw new Error(`${requestResult?.message || 'Der Antrag konnte nicht gespeichert werden.'} Außerdem konnte der Dienstplan nicht zurückgesetzt werden.`)
+        }
+        throw new Error(requestResult?.message || 'Die Admin-Entscheidung konnte nicht gespeichert werden.')
+      }
+      setScheduleShifts(updatedSchedule)
+      setScheduleRequests(updatedRequests)
+      setScheduleRequestFeedback(decision === 'approved' ? 'Antrag genehmigt.' : 'Antrag abgelehnt.')
+    } catch (error) {
+      setScheduleRequestFeedback(`Entscheidung konnte nicht gespeichert werden: ${error.message}`)
+    } finally {
+      setScheduleRequestBusyId('')
+    }
   }
 
   const filteredAuditEntries = auditEntries.filter((entry) =>
@@ -3160,44 +3314,6 @@ function App() {
     action,
     details,
   })
-
-  const handleQualityDraft = (orderId, field, value) => {
-    setQualityDrafts((current) => ({
-      ...current,
-      [orderId]: { ...current[orderId], [field]: value },
-    }))
-  }
-
-  const saveQualityReview = (orderId) => {
-    const draft = qualityDrafts[orderId]
-    if (!draft) return
-
-    const checkedAt = new Date().toISOString()
-    setOrders((current) => current.map((order) => {
-      if (order.id !== orderId) return order
-
-      const review = {
-        id: checkedAt,
-        checkedAt,
-        status: draft.qualityStatus ?? order.qualityStatus ?? 'Nicht geprüft',
-        notes: draft.qualityNotes ?? order.qualityNotes ?? '',
-        reviewer: currentUser.name,
-      }
-
-      return {
-        ...order,
-        ...draft,
-        qualityCheckedAt: checkedAt,
-        qualityHistory: [...(order.qualityHistory || []), review],
-        workflowHistory: [...(order.workflowHistory || []), createWorkflowEvent('Qualitätsprüfung', `${review.status}${review.notes ? ` · ${review.notes}` : ''}`)],
-      }
-    }))
-    setQualityDrafts((current) => {
-      const next = { ...current }
-      delete next[orderId]
-      return next
-    })
-  }
 
   const handleInventoryInput = (event) => {
     const { name, value } = event.target
@@ -7280,7 +7396,6 @@ function App() {
               {tab === 'lager' && 'Lager'}
               {tab === 'mde' && 'MDE · Scanner'}
               {tab === 'versand' && 'Versand & Tracking'}
-              {tab === 'chargen' && 'Chargen'}
               {tab === 'maschinenbau' && 'Maschinenbau'}
               {tab === 'dienstplan' && 'Dienstplan'}
               {tab === 'admin' && 'Admin'}
@@ -7899,6 +8014,189 @@ function App() {
                 )}
               </div>
             )}
+
+            {currentUser.role !== 'admin' && (
+              <div className="panel schedule-request-form-panel">
+                <div className="panel-header">
+                  <h2>Antrag stellen</h2>
+                  <span>Urlaub, Abwesenheit oder Schichttausch</span>
+                </div>
+                <form className="form-grid" onSubmit={submitScheduleRequest}>
+                  <label className="full-width">
+                    Antragsart
+                    <select
+                      value={scheduleRequestForm.type}
+                      onChange={(event) => setScheduleRequestForm((current) => ({ ...current, type: event.target.value }))}
+                    >
+                      {Object.entries(scheduleRequestTypeLabels).map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  {scheduleRequestForm.type === 'shift_swap' ? (
+                    <>
+                      <label className="full-width">
+                        Deine Schicht
+                        <select
+                          required
+                          value={scheduleRequestForm.shiftId}
+                          onChange={(event) => setScheduleRequestForm((current) => ({ ...current, shiftId: event.target.value }))}
+                        >
+                          <option value="">Schicht auswählen</option>
+                          {requestableScheduleShifts.map((shift) => (
+                            <option key={shift.id} value={shift.id}>{shift.date} · {shift.startTime}–{shift.endTime}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="full-width">
+                        Tauschpartner
+                        <select
+                          required
+                          value={scheduleRequestForm.targetEmployeeId}
+                          onChange={(event) => setScheduleRequestForm((current) => ({ ...current, targetEmployeeId: event.target.value }))}
+                        >
+                          <option value="">Mitarbeiter auswählen</option>
+                          {scheduleEmployees.filter((employee) => String(employee.id) !== String(currentUser.id)).map((employee) => (
+                            <option key={employee.id} value={employee.id}>{employee.name}</option>
+                          ))}
+                        </select>
+                      </label>
+                    </>
+                  ) : (
+                    <>
+                      <label>
+                        Beginn
+                        <input
+                          type="date"
+                          required
+                          value={scheduleRequestForm.startDate}
+                          onChange={(event) => setScheduleRequestForm((current) => ({ ...current, startDate: event.target.value }))}
+                        />
+                      </label>
+                      <label>
+                        Ende
+                        <input
+                          type="date"
+                          required
+                          min={scheduleRequestForm.startDate}
+                          value={scheduleRequestForm.endDate}
+                          onChange={(event) => setScheduleRequestForm((current) => ({ ...current, endDate: event.target.value }))}
+                        />
+                      </label>
+                    </>
+                  )}
+                  <label className="full-width">
+                    Notiz (optional)
+                    <textarea
+                      maxLength={500}
+                      value={scheduleRequestForm.note}
+                      onChange={(event) => setScheduleRequestForm((current) => ({ ...current, note: event.target.value }))}
+                      placeholder={scheduleRequestForm.type === 'sick_leave'
+                        ? 'Optionaler Hinweis – bitte keine Diagnose oder medizinischen Details angeben.'
+                        : 'Optionaler Hinweis für die Bearbeitung'}
+                    />
+                  </label>
+                  {scheduleRequestFeedback && <p className="schedule-feedback full-width" role="status">{scheduleRequestFeedback}</p>}
+                  <button type="submit" className="primary-button full-width-button">Antrag senden</button>
+                </form>
+              </div>
+            )}
+
+            <div className="panel schedule-requests-panel">
+              <div className="panel-header">
+                <h2>{currentUser.role === 'admin' ? 'Anträge bearbeiten' : 'Meine Anträge'}</h2>
+                <span>{visibleScheduleRequests.filter((request) => request.status === 'pending_admin' || request.status === 'pending_coworker').length} offen</span>
+              </div>
+              {visibleScheduleRequests.length === 0 ? (
+                <p className="schedule-empty-week">Noch keine Dienstplan-Anträge vorhanden.</p>
+              ) : (
+                <div className="schedule-request-list">
+                  {visibleScheduleRequests.map((request) => {
+                    const incomingSwap = currentUser.role !== 'admin'
+                      && request.type === 'shift_swap'
+                      && request.status === 'pending_coworker'
+                      && String(request.targetEmployeeId) === String(currentUser.id)
+                    const adminReview = currentUser.role === 'admin' && request.status === 'pending_admin'
+                    const firstShift = currentUser.role === 'admin'
+                      ? scheduleShifts.find((shift) => String(shift.id) === String(request.shiftId))
+                      : null
+                    return (
+                      <article className="schedule-request" key={request.id}>
+                        <div className="schedule-request-heading">
+                          <strong>{scheduleRequestTypeLabels[request.type] || 'Dienstplan-Antrag'}</strong>
+                          <span>{scheduleRequestStatusLabels[request.status] || request.status}</span>
+                        </div>
+                        <p>
+                          {request.requesterName}
+                          {request.type === 'shift_swap' && request.targetEmployeeName ? ` möchte mit ${request.targetEmployeeName} tauschen.` : ''}
+                          {request.startDate && ` · ${request.startDate} bis ${request.endDate}`}
+                        </p>
+                        {firstShift && <small>Angefragte Schicht: {firstShift.date} · {firstShift.startTime}–{firstShift.endTime}</small>}
+                        {request.note && <p>{request.note}</p>}
+                        {request.decisionNote && <p className="schedule-request-decision-note">Admin-Hinweis: {request.decisionNote}</p>}
+                        {incomingSwap && (
+                          <div className="schedule-request-actions">
+                            <label>
+                              Deine Schicht zum Tausch
+                              <select
+                                value={scheduleDecisionNotes[`shift:${request.id}`] || ''}
+                                onChange={(event) => setScheduleDecisionNotes((current) => ({ ...current, [`shift:${request.id}`]: event.target.value }))}
+                              >
+                                <option value="">Schicht auswählen</option>
+                                {requestableScheduleShifts.map((shift) => (
+                                  <option key={shift.id} value={shift.id}>{shift.date} · {shift.startTime}–{shift.endTime}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <button
+                              type="button"
+                              className="primary-button small"
+                              disabled={scheduleRequestBusyId === request.id || !scheduleDecisionNotes[`shift:${request.id}`]}
+                              onClick={() => respondToScheduleRequest(request, 'accept')}
+                            >Tausch annehmen</button>
+                            <button
+                              type="button"
+                              className="secondary-button small"
+                              disabled={scheduleRequestBusyId === request.id}
+                              onClick={() => respondToScheduleRequest(request, 'decline')}
+                            >Ablehnen</button>
+                          </div>
+                        )}
+                        {adminReview && (
+                          <div className="schedule-request-actions">
+                            <label>
+                              Entscheidungshinweis
+                              <input
+                                type="text"
+                                maxLength={500}
+                                value={scheduleDecisionNotes[request.id] || ''}
+                                onChange={(event) => setScheduleDecisionNotes((current) => ({ ...current, [request.id]: event.target.value }))}
+                                placeholder="Optional"
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              className="primary-button small"
+                              disabled={scheduleRequestBusyId === request.id}
+                              onClick={() => decideScheduleRequest(request, 'approved')}
+                            >Genehmigen</button>
+                            <button
+                              type="button"
+                              className="secondary-button small"
+                              disabled={scheduleRequestBusyId === request.id}
+                              onClick={() => decideScheduleRequest(request, 'declined')}
+                            >Ablehnen</button>
+                          </div>
+                        )}
+                      </article>
+                    )
+                  })}
+                </div>
+              )}
+              {currentUser.role === 'admin' && scheduleRequestFeedback && (
+                <p className="schedule-feedback" role="status">{scheduleRequestFeedback}</p>
+              )}
+            </div>
           </section>
         )}
 
@@ -10864,93 +11162,6 @@ function App() {
                   </tbody>
                 </table>
               </div>
-            </div>
-          </section>
-        )}
-
-        {activeTab === 'chargen' && (
-          <section className="panel">
-            <div className="panel-header">
-              <h2>Chargen- und Qualitätsprotokoll</h2>
-              <span>Rückverfolgbarkeit</span>
-            </div>
-            <div className="table-scroll">
-              <table className="data-table lot-table">
-                <thead>
-                  <tr>
-                    <th>Charge</th>
-                    <th>Produkt</th>
-                    <th>Dosen</th>
-                    <th>Trays</th>
-                    <th>Lohnabfüller</th>
-                    <th>Übergabe</th>
-                    <th>Geschmacksstatus</th>
-                    <th>Verkostungsnotiz</th>
-                    <th>Prüfverlauf</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {orders.map((order) => (
-                    <tr key={order.id}>
-                      <td>{order.lotNumber}</td>
-                      <td>{order.product}</td>
-                      <td>{order.bottleCount ?? '-'}</td>
-                      <td>{order.crateCount ?? '-'}</td>
-                      <td>{order.bottler || bottlerDetails.name}</td>
-                      <td>{order.handoffDate || '-'}</td>
-                      <td>
-                        <select
-                          className="lot-quality-select"
-                          data-quality={qualityDrafts[order.id]?.qualityStatus ?? order.qualityStatus ?? 'Nicht geprüft'}
-                          value={qualityDrafts[order.id]?.qualityStatus ?? order.qualityStatus ?? 'Nicht geprüft'}
-                          onChange={(event) => handleQualityDraft(order.id, 'qualityStatus', event.target.value)}
-                        >
-                          <option>Nicht geprüft</option>
-                          <option>Unauffällig</option>
-                          <option>Verdacht</option>
-                          <option>Fehlerhaft</option>
-                        </select>
-                      </td>
-                      <td>
-                        <textarea
-                          className="lot-note-input"
-                          value={qualityDrafts[order.id]?.qualityNotes ?? order.qualityNotes ?? ''}
-                          onChange={(event) => handleQualityDraft(order.id, 'qualityNotes', event.target.value)}
-                          placeholder="z. B. bitterer Nachgeschmack"
-                        />
-                      </td>
-                      <td>
-                        {order.qualityHistory?.length ? (
-                          <details className="lot-history">
-                            <summary>{order.qualityHistory.length} Prüfung(en)</summary>
-                            <ul>
-                              {[...order.qualityHistory].reverse().map((review) => (
-                                <li key={review.id}>
-                                  <strong>{review.status}</strong> · {new Date(review.checkedAt).toLocaleString('de-DE')}
-                                  {review.notes && <p>{review.notes}</p>}
-                                </li>
-                              ))}
-                            </ul>
-                          </details>
-                        ) : (
-                          <span>Keine Prüfung</span>
-                        )}
-                      </td>
-                      <td>
-                        <button
-                          type="button"
-                          className="secondary-button small"
-                          disabled={!qualityDrafts[order.id]}
-                          onClick={() => saveQualityReview(order.id)}
-                        >
-                          Speichern
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
             </div>
           </section>
         )}

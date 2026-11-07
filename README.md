@@ -8,7 +8,9 @@ Windows-Updates werden über den eingebauten Updater aus Firebase Hosting gelade
 
 ### Dienstplan
 
-Admins tragen Schichten in der Desktop-App unter **Dienstplan** ein. Nach der Cloud-Synchronisierung melden sich Mitarbeiter online unter `/schichtplan` mit ihren bestehenden Desktop-Benutzerdaten an. Dort sehen sie ausschließlich die eigenen Schichten; nur Admins können Schichten anlegen, bearbeiten oder löschen.
+Admins tragen Schichten in der Desktop-App unter **Dienstplan** ein. Nach der Cloud-Synchronisierung melden sich Mitarbeiter online unter `/schichtplan` mit ihren bestehenden Desktop-Benutzerdaten an. Dort sehen sie ausschließlich die eigenen Schichten; nur Admins können Schichten anlegen, bearbeiten oder löschen. Mitarbeiter können dort Schichttausch, Urlaub, Krankmeldung oder sonstige Abwesenheit beantragen. Ein Schichttausch benötigt die Zustimmung des Kollegen und anschließend die Freigabe durch einen Admin; Abwesenheiten entscheidet ein Admin. Bei Krankmeldungen sind keine Diagnose oder medizinischen Angaben erforderlich.
+
+Web-Dokumente im Archiv werden lokal in IndexedDB gespeichert. Bereits vorhandene Archivdateien werden beim ersten Öffnen automatisch dorthin migriert; die Browser-Speicherquote von `localStorage` begrenzt das Dokumentenarchiv dadurch nicht mehr.
 
 ### Webshop-Versand
 

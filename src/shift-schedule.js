@@ -7,6 +7,8 @@ const localDateString = (date) => [
   String(date.getDate()).padStart(2, '0'),
 ].join('-')
 
+export const getScheduleToday = (value = new Date()) => localDateString(value)
+
 export const getScheduleWeekStart = (value = new Date()) => {
   const date = value instanceof Date ? new Date(value) : new Date(`${value}T12:00:00`)
   if (Number.isNaN(date.getTime())) return localDateString(new Date())

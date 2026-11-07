@@ -20,7 +20,12 @@ const {
   validatePaymentRequestUpdate,
 } = require('../functions/payment-requests.cjs')
 const { validateLabTestsUpdate } = require('../functions/lab-tests.cjs')
-const { filterShiftsForEmployee, validateShiftSchedule } = require('../functions/shift-schedule.cjs')
+const {
+  filterScheduleRequestsForEmployee,
+  filterShiftsForEmployee,
+  validateScheduleRequestUpdate,
+  validateShiftSchedule,
+} = require('../functions/shift-schedule.cjs')
 const { normalizeEmailAddress } = require('../functions/email-address.cjs')
 const {
   maxFinanceReceiptBytes,
@@ -86,6 +91,7 @@ const sharedDataKeys = new Set([
   'zyro-reports',
   'zyro-machinebau',
   'zyro-schedule',
+  'zyro-schedule-requests',
   'zyro-hr-sensitive',
   'zyro-archive-documents',
   'zyro-delete-requests',
@@ -287,10 +293,15 @@ const updateBusinessData = (key, value, actor = null) => {
     const previousValue = data[key]
     const storedValue = key === 'zyro-payment-requests'
       ? validatePaymentRequestUpdate(previousValue, value, actor)
-      : value
+      : key === 'zyro-schedule-requests'
+        ? validateScheduleRequestUpdate(previousValue, value, actor)
+        : value
     if (key === 'zyro-schedule') {
       if (actor?.role !== 'admin') throw new Error('Nur Admins dürfen den Dienstplan ändern.')
       validateShiftSchedule(value)
+    }
+    if (key === 'zyro-schedule-requests') {
+      if (actor?.role !== 'admin') throw new Error('Nur Admins dürfen Dienstplan-Anträge bearbeiten.')
     }
     if (key === 'zyro-lab-tests') validateLabTestsUpdate(previousValue, value, actor)
     if (key === 'zyro-sales-documents') validateIssuedInvoices(previousValue, value, actor)
@@ -357,6 +368,10 @@ const filterHrSensitiveSnapshot = (snapshot, requester) => {
 const filterScheduleSnapshot = (snapshot, requester) => {
   if (requester?.role !== 'admin') {
     snapshot.data['zyro-schedule'] = filterShiftsForEmployee(snapshot.data['zyro-schedule'], requester?.id)
+    snapshot.data['zyro-schedule-requests'] = filterScheduleRequestsForEmployee(
+      snapshot.data['zyro-schedule-requests'],
+      requester?.id,
+    )
   }
   return snapshot
 }
@@ -574,6 +589,10 @@ const validateClientSharedWrite = (key, value, actor) => {
   if (key === 'zyro-schedule') {
     if (actor?.role !== 'admin') throw new Error('Nur Admins dürfen den Dienstplan ändern.')
     validateShiftSchedule(value)
+  }
+  if (key === 'zyro-schedule-requests') {
+    if (actor?.role !== 'admin') throw new Error('Nur Admins dürfen Dienstplan-Anträge bearbeiten.')
+    validateScheduleRequestUpdate(readBusinessData()[key], value, actor)
   }
   if (key === 'zyro-lab-tests') validateLabTestsUpdate(readBusinessData()[key], value, actor)
   if (key === 'zyro-finance-entries') validateFinanceEntries(readBusinessData()[key], value, actor)
@@ -911,7 +930,7 @@ const userCanAccessFinance = (user) => user?.role === 'admin'
   || (Array.isArray(user?.permissions) && user.permissions.includes('finanzen'))
 const assignableUserPermissions = [
   'dashboard', 'tickets', 'telefon', 'dokumente', 'etiketten', 'produkte', 'rezepturen',
-  'bestellungen', 'verkauf', 'kunden', 'analyse', 'lager', 'mde', 'versand', 'chargen', 'einkauf', 'finanzen',
+  'bestellungen', 'verkauf', 'kunden', 'analyse', 'lager', 'mde', 'versand', 'einkauf', 'finanzen',
 ]
 const defaultEmployeePermissions = assignableUserPermissions.filter((permission) => permission !== 'finanzen')
 const normalizeUserPermissions = (permissions) => [...new Set((Array.isArray(permissions) ? permissions : [])
@@ -1560,6 +1579,17 @@ ipcMain.on('zyro-data:get', (event, key, sessionToken) => {
       }
       return
     }
+    if (key === 'zyro-schedule-requests') {
+      const userId = authSessions.get(String(sessionToken || ''))
+      const requester = readAuthUsers().find((user) => String(user.id) === userId)
+      event.returnValue = {
+        found: true,
+        value: requester?.role === 'admin'
+          ? (Array.isArray(data[key]) ? data[key] : [])
+          : filterScheduleRequestsForEmployee(data[key], requester?.id),
+      }
+      return
+    }
     if (!Object.hasOwn(data, key)) {
       event.returnValue = { found: false }
       return
@@ -1597,6 +1627,10 @@ ipcMain.handle('zyro-data:set', async (event, key, value, sessionToken) => {
     const requester = readAuthUsers().find((user) => String(user.id) === requesterId)
     if (key === 'zyro-schedule' && requester?.role !== 'admin') {
       throw new Error('Nur Admins dürfen den Dienstplan ändern.')
+    }
+    if (key === 'zyro-schedule-requests') {
+      if (requester?.role !== 'admin') throw new Error('Nur Admins dürfen Dienstplan-Anträge bearbeiten.')
+      validateScheduleRequestUpdate(storedValue, value, requester)
     }
     if (key === 'zyro-finance-entries' && !userCanAccessFinance(requester)) throw new Error('Du hast keine Finanzen-Berechtigung.')
     if (['zyro-suppliers', 'zyro-purchase-orders'].includes(key)

@@ -39,7 +39,14 @@ const { validateElsterSetupEntries } = require('./elster-validation.cjs')
 const { validateCompanyDetailsEntries, defaultCompanyDetails } = require('./company-details.cjs')
 const { validateBottlerDetailsEntries } = require('./bottler-details.cjs')
 const { validateSalesDocumentEmail } = require('./sales-document-email.cjs')
-const { filterShiftsForEmployee, validateShiftSchedule } = require('./shift-schedule.cjs')
+const {
+  createScheduleRequest,
+  filterScheduleRequestsForEmployee,
+  filterShiftsForEmployee,
+  respondToScheduleRequest,
+  validateScheduleRequestUpdate,
+  validateShiftSchedule,
+} = require('./shift-schedule.cjs')
 const { normalizeEmailAddress, canonicalEmailAddress } = require('./email-address.cjs')
 const { describeSmtpFailure, ensureRecipientsAccepted, sendWithTransientRetry } = require('./email-delivery.cjs')
 const {
@@ -1673,6 +1680,7 @@ const cloudDataKeys = new Set([
   'zyro-reports',
   'zyro-machinebau',
   'zyro-schedule',
+  'zyro-schedule-requests',
   'zyro-hr-sensitive',
   'zyro-archive-documents',
   'zyro-delete-requests',
@@ -1789,7 +1797,7 @@ const webAppPermissions = {
 }
 const defaultWebAppPermissions = [
   'dashboard', 'tickets', 'telefon', 'dokumente', 'etiketten', 'produkte', 'rezepturen',
-  'bestellungen', 'verkauf', 'kunden', 'analyse', 'lager', 'mde', 'versand', 'chargen', 'zahlungen', 'einkauf',
+  'bestellungen', 'verkauf', 'kunden', 'analyse', 'lager', 'mde', 'versand', 'zahlungen', 'einkauf',
   'maschinenbau',
 ]
 const webAppLoginRateLimit = async (request, username) => {
@@ -2075,7 +2083,7 @@ exports.webAppCalls = onRequest({
 
 const webAppRecordId = (key, record) => key === 'zyro-inventory' ? record?.item : record?.id
 
-const validateWebAppWrite = (key, currentValue, nextValue, actor) => {
+const validateWebAppWrite = (key, currentValue, nextValue, actor, allowScheduleRequestAction = false) => {
   if (!webAppWritableKeys.has(key) || !Array.isArray(nextValue)) throw new Error('Datensatz ungültig oder schreibgeschützt.')
   if (key === 'zyro-sales-target') {
     const permissions = Array.isArray(actor.permissions) ? actor.permissions : defaultWebAppPermissions
@@ -2122,6 +2130,9 @@ const validateWebAppWrite = (key, currentValue, nextValue, actor) => {
   if (key === 'zyro-schedule') {
     if (actor.role !== 'admin') throw new Error('Nur Admins dürfen den Dienstplan ändern.')
     return validateShiftSchedule(nextValue)
+  }
+  if (key === 'zyro-schedule-requests') {
+    return validateScheduleRequestUpdate(currentValue, nextValue, actor, allowScheduleRequestAction)
   }
   if (key === 'zyro-lab-tests') {
     const permissions = Array.isArray(actor.permissions) ? actor.permissions : defaultWebAppPermissions
@@ -2291,7 +2302,7 @@ const buildWebAppAuditEntries = (key, previousValue, nextValue, actor, existingE
   return [...(Array.isArray(existingEntries) ? existingEntries : []), ...additions]
 }
 
-const cloudPutWebAppData = async (key, value, baseRevision, actor) => {
+const cloudPutWebAppData = async (key, value, baseRevision, actor, allowScheduleRequestAction = false) => {
   if (!Array.isArray(value)) {
     const error = new Error(`Gemeinsamer Datensatz „${key}“ muss als Liste gespeichert werden.`)
     error.code = 'INVALID_SHARED_DATA'
@@ -2312,9 +2323,9 @@ const cloudPutWebAppData = async (key, value, baseRevision, actor) => {
     const currentValue = previousEncoded
       ? JSON.parse(zlib.gunzipSync(Buffer.from(previousEncoded, 'base64')).toString('utf8'))
       : null
-    const storedValue = validateWebAppWrite(key, currentValue, value, actor) || value
+    const storedValue = validateWebAppWrite(key, currentValue, value, actor, allowScheduleRequestAction) || value
     const serialized = JSON.stringify(storedValue)
-    if (serialized.length > 8 * 1024 * 1024) throw new Error('Daten sind zu groß.')
+    if (Buffer.byteLength(serialized, 'utf8') > 10 * 1024 * 1024) throw new Error('Daten sind zu groß.')
     const compressed = zlib.gzipSync(Buffer.from(serialized, 'utf8')).toString('base64')
     const chunks = []
     for (let offset = 0; offset < compressed.length; offset += cloudChunkSize) chunks.push(compressed.slice(offset, offset + cloudChunkSize))
@@ -2411,7 +2422,7 @@ exports.cloudData = onRequest({
     if (action === 'put') {
       const data = request.body?.data
       const baseRevision = Number(request.body?.baseRevision)
-      if (typeof data !== 'string' || data.length > 8 * 1024 * 1024 || !Number.isInteger(baseRevision) || baseRevision < 0) {
+      if (typeof data !== 'string' || data.length > 10 * 1024 * 1024 || !Number.isInteger(baseRevision) || baseRevision < 0) {
         return response.status(400).json({ error: 'Daten ungültig oder zu groß.' })
       }
       const chunks = []
@@ -3550,10 +3561,62 @@ exports.webAppData = onRequest({
     if (key === 'zyro-hr-sensitive' && actor.role !== 'admin') {
       return response.status(403).json({ error: 'Geschützte Mitarbeiterdaten dürfen nur von Admins verwaltet werden.' })
     }
+    if (key === 'zyro-schedule-requests' && ['schedule-request-create', 'schedule-request-respond'].includes(action)) {
+      if (actor.role === 'admin') return response.status(403).json({ error: 'Dienstplan-Anträge können nur Mitarbeiter stellen oder beantworten.' })
+      let updatedRequest
+      let result
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const { revision, value } = await readCloudAppData(key)
+        const requests = Array.isArray(value) ? value : []
+        let nextRequest
+        if (action === 'schedule-request-create') {
+          const { value: schedule } = await readCloudAppData('zyro-schedule')
+          const type = String(request.body?.type || '')
+          let targetEmployee = null
+          if (type === 'shift_swap') {
+            const { value: users } = await readCloudAppData('zyro-users')
+            targetEmployee = (Array.isArray(users) ? users : []).find((user) => (
+              String(user.id) === String(request.body?.targetEmployeeId || '') && user.role !== 'admin'
+            ))
+          }
+          nextRequest = createScheduleRequest({
+            id: crypto.randomUUID(),
+            type,
+            shiftId: String(request.body?.shiftId || ''),
+            targetEmployee,
+            startDate: String(request.body?.startDate || ''),
+            endDate: String(request.body?.endDate || ''),
+            note: request.body?.note,
+          }, actor, Array.isArray(schedule) ? schedule : [])
+        } else {
+          const requestId = String(request.body?.requestId || '')
+          const currentRequest = requests.find((entry) => String(entry.id) === requestId)
+          if (!currentRequest) return response.status(404).json({ error: 'Dienstplan-Antrag nicht gefunden.' })
+          const { value: schedule } = await readCloudAppData('zyro-schedule')
+          nextRequest = respondToScheduleRequest(currentRequest, {
+            action: String(request.body?.response || ''),
+            targetShiftId: String(request.body?.targetShiftId || ''),
+          }, actor, Array.isArray(schedule) ? schedule : [])
+        }
+        const nextRequests = requests.some((entry) => String(entry.id) === String(nextRequest.id))
+          ? requests.map((entry) => String(entry.id) === String(nextRequest.id) ? nextRequest : entry)
+          : [...requests, nextRequest]
+        result = await cloudPutWebAppData(key, nextRequests, revision, actor, true)
+        if (!result.conflict) {
+          updatedRequest = nextRequest
+          break
+        }
+      }
+      if (!updatedRequest) return response.status(409).json({ error: 'Anträge wurden gleichzeitig geändert. Bitte erneut versuchen.' })
+      return response.json({ request: updatedRequest, revision: result.revision })
+    }
     if (action === 'get') {
       const result = await readCloudAppData(key)
       if (key === 'zyro-schedule' && actor.role !== 'admin') {
         result.value = filterShiftsForEmployee(result.value, actor.id)
+      }
+      if (key === 'zyro-schedule-requests' && actor.role !== 'admin') {
+        result.value = filterScheduleRequestsForEmployee(result.value, actor.id)
       }
       if (key === 'zyro-payment-requests' && actor.role !== 'admin') {
         result.value = (Array.isArray(result.value) ? result.value : [])

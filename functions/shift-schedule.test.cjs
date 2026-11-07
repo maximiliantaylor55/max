@@ -1,6 +1,13 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { filterShiftsForEmployee, validateShiftSchedule } = require('./shift-schedule.cjs')
+const {
+  createScheduleRequest,
+  filterScheduleRequestsForEmployee,
+  filterShiftsForEmployee,
+  respondToScheduleRequest,
+  validateScheduleRequestUpdate,
+  validateShiftSchedule,
+} = require('./shift-schedule.cjs')
 
 const shifts = [
   {
@@ -42,4 +49,64 @@ test('filters schedule entries to the authenticated employee only', () => {
   assert.deepEqual(filterShiftsForEmployee(shifts, 'employee-2'), [shifts[1]])
   assert.deepEqual(filterShiftsForEmployee(shifts, ''), [])
   assert.deepEqual(filterShiftsForEmployee(null, 'employee-1'), [])
+})
+
+test('creates absence requests and limits employee request reads to involved employees', () => {
+  const requester = { id: 'employee-1', name: 'Mitarbeiter Eins', role: 'employee' }
+  const request = createScheduleRequest({
+    id: 'request-1',
+    type: 'vacation',
+    startDate: '2026-12-01',
+    endDate: '2026-12-05',
+    note: 'Urlaub',
+  }, requester, [], '2026-11-01T10:00:00.000Z')
+
+  assert.equal(request.status, 'pending_admin')
+  assert.deepEqual(filterScheduleRequestsForEmployee([request], 'employee-1'), [request])
+  assert.deepEqual(filterScheduleRequestsForEmployee([request], 'employee-2'), [])
+  assert.deepEqual(validateScheduleRequestUpdate([], [request], requester, true), [request])
+})
+
+test('requires a coworker to choose one of their own future shifts before a swap reaches admin', () => {
+  const requester = { id: 'employee-1', name: 'Mitarbeiter Eins', role: 'employee' }
+  const coworker = { id: 'employee-2', name: 'Mitarbeiter Zwei', role: 'employee' }
+  const request = createScheduleRequest({
+    id: 'request-swap',
+    type: 'shift_swap',
+    shiftId: 'shift-1',
+    targetEmployee: coworker,
+    note: '',
+  }, requester, shifts, '2026-11-01T10:00:00.000Z')
+
+  assert.throws(() => respondToScheduleRequest(request, {
+    action: 'accept',
+    targetShiftId: 'shift-1',
+  }, coworker, shifts, '2026-11-01T10:00:00.000Z'), /eigene/)
+  const accepted = respondToScheduleRequest(request, {
+    action: 'accept',
+    targetShiftId: 'shift-2',
+  }, coworker, shifts, '2026-11-01T10:00:00.000Z')
+  assert.equal(accepted.status, 'pending_admin')
+  assert.equal(accepted.coworkerResponse, 'accepted')
+  assert.deepEqual(filterScheduleRequestsForEmployee([accepted], 'employee-2'), [accepted])
+  assert.deepEqual(validateScheduleRequestUpdate([request], [accepted], coworker, true), [accepted])
+})
+
+test('rejects employee edits to somebody else’s request', () => {
+  const requester = { id: 'employee-1', name: 'Mitarbeiter Eins', role: 'employee' }
+  const coworker = { id: 'employee-2', name: 'Mitarbeiter Zwei', role: 'employee' }
+  const request = createScheduleRequest({
+    id: 'request-1',
+    type: 'vacation',
+    startDate: '2026-12-01',
+    endDate: '2026-12-05',
+  }, requester, [], '2026-11-01T10:00:00.000Z')
+  assert.throws(() => validateScheduleRequestUpdate([request], [{
+    ...request,
+    status: 'approved',
+    adminDecidedAt: '2026-11-01T10:05:00.000Z',
+    adminDecidedBy: coworker.name,
+    decisionNote: '',
+    updatedAt: '2026-11-01T10:05:00.000Z',
+  }], coworker, true), /offenen Schichttausch/)
 })

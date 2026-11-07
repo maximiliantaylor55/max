@@ -21,6 +21,7 @@ const dataKeys = [
   'zyro-reports',
   'zyro-machinebau',
   'zyro-schedule',
+  'zyro-schedule-requests',
   'zyro-hr-sensitive',
   'zyro-archive-documents',
   'zyro-delete-requests',
@@ -32,6 +33,7 @@ const dataKeys = [
 const syncStateKey = 'zyro-web-cloud-sync'
 const sessionStateKey = 'zyro-web-current-user'
 const sessionTokenKey = 'zyro-web-session-token'
+const archiveDocumentsKey = 'zyro-archive-documents'
 const cloudPollIntervalMs = 10 * 1000
 const callPollIntervalMs = 1500
 let localRevision = Date.now()
@@ -43,8 +45,92 @@ let callConnection
 const callMessageListeners = new Set()
 const callErrorListeners = new Set()
 const callDisconnectListeners = new Set()
-
+let archiveDocumentsCache = []
+let archiveDatabase
+let archiveDocumentsLoaded = false
 const emit = (name, detail = {}) => window.dispatchEvent(new CustomEvent(name, { detail }))
+
+const archiveDocumentsReady = typeof window !== 'undefined' && !window.zyroAuth
+  ? new Promise((resolve) => {
+    if (!window.indexedDB) {
+      emit('zyro-data-sync-error', { message: 'Der lokale Archivspeicher (IndexedDB) ist in diesem Browser nicht verfügbar.' })
+      resolve(false)
+      return
+    }
+
+    let openRequest
+    try {
+      openRequest = window.indexedDB.open('zyro-management-storage', 1)
+    } catch (error) {
+      emit('zyro-data-sync-error', { message: `Der lokale Archivspeicher konnte nicht geöffnet werden: ${error.message}` })
+      resolve(false)
+      return
+    }
+    openRequest.onupgradeneeded = () => {
+      if (!openRequest.result.objectStoreNames.contains('collections')) {
+        openRequest.result.createObjectStore('collections', { keyPath: 'key' })
+      }
+    }
+    openRequest.onerror = () => {
+      emit('zyro-data-sync-error', { message: `Der lokale Archivspeicher konnte nicht geöffnet werden: ${openRequest.error?.message || 'Unbekannter Fehler'}` })
+      resolve(false)
+    }
+    openRequest.onsuccess = () => {
+      try {
+        const database = openRequest.result
+        archiveDatabase = database
+        const transaction = database.transaction('collections', 'readwrite')
+        const store = transaction.objectStore('collections')
+        const getRequest = store.get(archiveDocumentsKey)
+        let removeLegacyValue = false
+        getRequest.onsuccess = () => {
+          if (getRequest.result) {
+            archiveDocumentsCache = Array.isArray(getRequest.result.value) ? getRequest.result.value : []
+            return
+          }
+          let legacyValue
+          try {
+            legacyValue = window.localStorage.getItem(archiveDocumentsKey)
+          } catch (error) {
+            emit('zyro-data-sync-error', { message: `Vorhandene Archivdokumente konnten nicht gelesen werden: ${error.message}` })
+            transaction.abort()
+            return
+          }
+          if (legacyValue === null) return
+          try {
+            const documents = JSON.parse(legacyValue)
+            if (!Array.isArray(documents)) throw new Error('Das Archivformat ist ungültig.')
+            archiveDocumentsCache = documents
+            store.put({ key: archiveDocumentsKey, value: documents })
+            removeLegacyValue = true
+          } catch (error) {
+            emit('zyro-data-sync-error', { message: `Archivdokumente konnten nicht migriert werden: ${error.message}` })
+            transaction.abort()
+          }
+        }
+        transaction.oncomplete = () => {
+          if (removeLegacyValue) {
+            try {
+              window.localStorage.removeItem(archiveDocumentsKey)
+            } catch (error) {
+              emit('zyro-data-sync-error', { message: `Das migrierte Archiv ist gespeichert, aber der alte Browser-Eintrag konnte nicht entfernt werden: ${error.message}` })
+            }
+          }
+          archiveDocumentsLoaded = true
+          resolve(true)
+        }
+        transaction.onerror = () => {
+          emit('zyro-data-sync-error', { message: `Archivdokumente konnten nicht migriert werden: ${transaction.error?.message || 'Unbekannter Fehler'}` })
+          resolve(false)
+        }
+        transaction.onabort = () => resolve(false)
+      } catch (error) {
+        emit('zyro-data-sync-error', { message: `Der lokale Archivspeicher ist nicht verfügbar: ${error.message}` })
+        resolve(false)
+      }
+    }
+  })
+  : Promise.resolve(true)
 
 const readJson = (key, fallback = null) => {
   const stored = window.localStorage.getItem(key)
@@ -102,8 +188,24 @@ const requestJson = async (url, options = {}, requiresAuth = true) => {
   return result
 }
 
-const localValue = (key) => readJson(key)
-const saveLocalValue = (key, value) => {
+const localValue = (key) => key === archiveDocumentsKey ? archiveDocumentsCache : readJson(key)
+const saveLocalValue = async (key, value) => {
+  if (key === archiveDocumentsKey) {
+    if (!await archiveDocumentsReady) throw new Error('Der lokale Archivspeicher ist nicht verfügbar; Dokumente wurden nicht gespeichert.')
+    if (!archiveDatabase) throw new Error('Der lokale Archivspeicher ist nicht verfügbar; Dokumente wurden nicht gespeichert.')
+    const transaction = archiveDatabase.transaction('collections', 'readwrite')
+    if (value === null || value === undefined) transaction.objectStore('collections').delete(key)
+    else transaction.objectStore('collections').put({ key, value })
+    await new Promise((resolve, reject) => {
+      transaction.oncomplete = resolve
+      transaction.onerror = () => reject(new Error(transaction.error?.message || 'Archivdokumente konnten nicht gespeichert werden.'))
+      transaction.onabort = () => reject(new Error(transaction.error?.message || 'Speichern der Archivdokumente wurde abgebrochen.'))
+    })
+    archiveDocumentsCache = Array.isArray(value) ? value : []
+    archiveDocumentsLoaded = true
+    localRevision += 1
+    return
+  }
   if (value === null || value === undefined) window.localStorage.removeItem(key)
   else writeJson(key, value)
 }
@@ -132,7 +234,7 @@ const mergeRecords = (key, base, local, remote) => {
 const scannerMode = new URLSearchParams(window.location.search).get('mode') === 'scanner'
 // Am Scanner schreibt nur die Cloud-Funktion (MDE-Buchungen); lokale Stände werden immer durch die Cloud ersetzt.
 const cloudOwnedKeys = new Set(['zyro-products', 'zyro-sales-documents', 'zyro-stock-movements', 'zyro-purchase-orders'])
-const employeeReadOnlyKeys = new Set(['zyro-schedule'])
+const employeeReadOnlyKeys = new Set(['zyro-schedule', 'zyro-schedule-requests'])
 
 const syncCloudData = async (force = false, requestedKeys = null) => {
   if (!window.localStorage.getItem(sessionTokenKey)) return
@@ -149,18 +251,22 @@ const syncCloudData = async (force = false, requestedKeys = null) => {
   const syncErrors = []
   try {
     const state = readSyncState()
+    if (!await archiveDocumentsReady) throw new Error('Der lokale Archivspeicher ist nicht verfügbar; Cloud-Synchronisierung wurde angehalten, damit keine Dokumente verloren gehen.')
     const userId = String(readCachedUser()?.id || '')
     const previousUserId = window.localStorage.getItem('zyro-web-sync-user-id')
     if (userId && previousUserId !== userId) {
-      saveLocalValue('zyro-payment-requests', null)
-      saveLocalValue('zyro-payment-settings', null)
-      saveLocalValue('zyro-schedule', null)
+      await saveLocalValue('zyro-payment-requests', null)
+      await saveLocalValue('zyro-payment-settings', null)
+      await saveLocalValue('zyro-schedule', null)
+      await saveLocalValue('zyro-schedule-requests', null)
       delete state.revisions['zyro-payment-requests']
       delete state.bases['zyro-payment-requests']
       delete state.revisions['zyro-payment-settings']
       delete state.bases['zyro-payment-settings']
       delete state.revisions['zyro-schedule']
       delete state.bases['zyro-schedule']
+      delete state.revisions['zyro-schedule-requests']
+      delete state.bases['zyro-schedule-requests']
       window.localStorage.setItem('zyro-web-sync-user-id', userId)
     }
     const manifest = await requestJson('/api/management/data', {
@@ -178,7 +284,7 @@ const syncCloudData = async (force = false, requestedKeys = null) => {
             body: JSON.stringify({ action: 'get', key }),
           })
           const value = Array.isArray(fetched.value) ? fetched.value : []
-          saveLocalValue(key, value)
+          await saveLocalValue(key, value)
           state.revisions[key] = fetched.revision
           state.bases[key] = JSON.stringify(value)
         }
@@ -190,7 +296,7 @@ const syncCloudData = async (force = false, requestedKeys = null) => {
             method: 'POST',
             body: JSON.stringify({ action: 'get', key }),
           })
-          saveLocalValue(key, fetched.value)
+          await saveLocalValue(key, fetched.value)
           state.revisions[key] = fetched.revision
           state.bases[key] = JSON.stringify(fetched.value)
         }
@@ -209,7 +315,7 @@ const syncCloudData = async (force = false, requestedKeys = null) => {
           })
           local = fetched.value
           localJson = JSON.stringify(local)
-          saveLocalValue(key, local)
+          await saveLocalValue(key, local)
           state.revisions[key] = fetched.revision
           state.bases[key] = localJson
           continue
@@ -231,7 +337,7 @@ const syncCloudData = async (force = false, requestedKeys = null) => {
         const base = JSON.parse(baseJson)
         const merged = localJson === baseJson ? remote : mergeRecords(key, base, local, remote)
         if (JSON.stringify(merged) !== localJson) {
-          saveLocalValue(key, merged)
+          await saveLocalValue(key, merged)
           local = merged
           localJson = JSON.stringify(local)
         }
@@ -257,6 +363,10 @@ const syncCloudData = async (force = false, requestedKeys = null) => {
         state.bases[key] = JSON.stringify(pushValue)
       } catch (error) {
         if (error.code === 'INVALID_SHARED_DATA' || error.status === 400) {
+          if (key === archiveDocumentsKey) {
+            syncErrors.push(`Archivdaten wurden von der Cloud abgelehnt und bleiben lokal erhalten. (${error.message})`)
+            continue
+          }
           const backupKey = `zyro-web-invalid-data-backup-${key}`
           try {
             if (window.localStorage.getItem(backupKey) === null) {
@@ -275,7 +385,7 @@ const syncCloudData = async (force = false, requestedKeys = null) => {
           })
           if (remote.value === null || Array.isArray(remote.value)) {
             const restoredValue = Array.isArray(remote.value) ? remote.value : []
-            saveLocalValue(key, restoredValue)
+            await saveLocalValue(key, restoredValue)
             state.revisions[key] = remote.revision
             state.bases[key] = JSON.stringify(restoredValue)
             emit('zyro-data-sync-restored', { key, value: restoredValue })
@@ -525,6 +635,7 @@ if (typeof window !== 'undefined' && !window.zyroAuth) {
     },
     get: (key) => {
       if (key === 'zyro-schedule' && !readCachedUser()) return { found: true, value: [] }
+      if (key === archiveDocumentsKey && archiveDocumentsLoaded) return { found: true, value: archiveDocumentsCache }
       if (key === 'zyro-lab-tests'
         && readCachedUser()?.role !== 'admin'
         && !readCachedUser()?.permissions?.includes('rezepturen')) return { found: false, value: null }
@@ -557,6 +668,15 @@ if (typeof window !== 'undefined' && !window.zyroAuth) {
         return {
           found: true,
           value: Array.isArray(value) ? value.filter((entry) => String(entry.requesterId) === String(readCachedUser()?.id || '')) : [],
+        }
+      }
+      if (key === 'zyro-schedule-requests' && readCachedUser()?.role !== 'admin') {
+        const employeeId = String(readCachedUser()?.id || '')
+        return {
+          found: true,
+          value: Array.isArray(value) ? value.filter((entry) => (
+            String(entry.requesterId) === employeeId || String(entry.targetEmployeeId || '') === employeeId
+          )) : [],
         }
       }
       return { found: true, value }
@@ -616,20 +736,37 @@ if (typeof window !== 'undefined' && !window.zyroAuth) {
       }
       const previousValue = readJson(key)
       try {
-        saveLocalValue(key, value)
+        await saveLocalValue(key, value)
         if (isPaymentData) {
           await syncCloudData(true)
         }
       } catch (error) {
         if (isPaymentData) {
-          saveLocalValue(key, previousValue)
+          await saveLocalValue(key, previousValue)
         }
         return { success: false, message: `Speichern fehlgeschlagen: ${error.message}` }
       }
       if (getAccessibleDataKeys().includes(key)) scheduleSync()
       return { success: true }
     },
+    createScheduleRequest: async (payload) => {
+      const result = await requestJson('/api/management/data', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'schedule-request-create', key: 'zyro-schedule-requests', ...payload }),
+      })
+      await syncCloudData(true, ['zyro-schedule-requests'])
+      return result
+    },
+    respondScheduleRequest: async (payload) => {
+      const result = await requestJson('/api/management/data', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'schedule-request-respond', key: 'zyro-schedule-requests', ...payload }),
+      })
+      await syncCloudData(true, ['zyro-schedule-requests'])
+      return result
+    },
     getSnapshot: async () => {
+      if (!await archiveDocumentsReady) throw new Error('Der lokale Archivspeicher ist nicht verfügbar; lokale Dokumente bleiben erhalten.')
       try {
         await syncCloudData()
       } catch (error) {
@@ -639,7 +776,13 @@ if (typeof window !== 'undefined' && !window.zyroAuth) {
         revision: `web-${localRevision}`,
         data: Object.fromEntries(getAccessibleDataKeys().map((key) => [
           key,
-          key === 'zyro-schedule' && !readCachedUser() ? [] : localValue(key),
+          key === 'zyro-schedule' && !readCachedUser() ? []
+            : key === 'zyro-schedule-requests' && readCachedUser()?.role !== 'admin'
+              ? (Array.isArray(localValue(key)) ? localValue(key).filter((entry) => (
+                String(entry.requesterId) === String(readCachedUser()?.id || '')
+                || String(entry.targetEmployeeId || '') === String(readCachedUser()?.id || '')
+              )) : [])
+              : localValue(key),
         ])),
       }
     },

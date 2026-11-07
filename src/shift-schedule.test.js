@@ -1,11 +1,16 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  getScheduleToday,
   getScheduleWeekDates,
   getScheduleWeekStart,
   sortScheduleShifts,
   validateShiftDraft,
 } from './shift-schedule.js'
+
+test('formats a schedule date using the local calendar day', () => {
+  assert.equal(getScheduleToday(new Date(2026, 10, 9)), '2026-11-09')
+})
 
 test('finds the Monday and seven local dates for a schedule week', () => {
   assert.equal(getScheduleWeekStart('2026-11-07'), '2026-11-02')

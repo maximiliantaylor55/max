@@ -1245,7 +1245,9 @@
 }
 
 .schedule-calendar-panel,
-.schedule-editor-panel {
+.schedule-editor-panel,
+.schedule-request-form-panel,
+.schedule-requests-panel {
   min-width: 0;
 }
 
@@ -1350,6 +1352,59 @@
   margin: 0;
   color: #6ee7b7;
   font-size: 0.85rem;
+}
+
+.schedule-request-list {
+  display: grid;
+  gap: 10px;
+}
+
+.schedule-request {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 10px;
+  background: rgba(2, 8, 23, 0.24);
+  overflow-wrap: anywhere;
+}
+
+.schedule-request > p {
+  margin: 0;
+  color: #cbd5e1;
+  white-space: pre-wrap;
+}
+
+.schedule-request > small {
+  color: #94a3b8;
+}
+
+.schedule-request-heading,
+.schedule-request-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.schedule-request-heading > span {
+  color: #fcd34d;
+  font-size: 0.8rem;
+}
+
+.schedule-request-actions label {
+  display: grid;
+  flex: 1 1 220px;
+  gap: 6px;
+}
+
+.schedule-request-actions button {
+  width: auto;
+}
+
+.schedule-request-decision-note {
+  color: #94a3b8 !important;
 }
 
 .order-scan-form {
