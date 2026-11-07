@@ -17,6 +17,12 @@ import {
   getSkr03AccountSuggestion,
 } from './erp-accounting.js'
 import { calculateProductionCost } from './production-calculation.js'
+import {
+  getScheduleWeekDates,
+  getScheduleWeekStart,
+  sortScheduleShifts,
+  validateShiftDraft,
+} from './shift-schedule.js'
 import { getShopIssues, getShopStock } from './shop-status.js'
 import {
   getArchiveDocumentsBytes,
@@ -204,6 +210,15 @@ const createFinanceEntryForm = () => {
   const today = new Date().toISOString().slice(0, 10)
   return { type: 'expense', category: 'Wareneinkauf', date: today, paidAt: today, description: '', counterparty: '', documentNumber: '', grossAmount: '', vatRate: '19', accountNumber: '', sourceDocumentId: '', receiptAvailable: false }
 }
+const createScheduleShiftForm = () => ({
+  employeeId: '',
+  date: getScheduleWeekStart(),
+  startTime: '08:00',
+  endTime: '16:00',
+  breakMinutes: '30',
+  location: '',
+  notes: '',
+})
 const createPaymentRequestForm = () => ({
   clientName: '',
   recipientName: '',
@@ -273,6 +288,7 @@ const elsterSetupFromEntries = (entries) => ({
 })
 const elsterSetupEntry = (setup) => ({ id: 'setup', ...setup })
 const requestedManagementMode = new URLSearchParams(window.location.search).get('mode')
+const scheduleStandalone = window.location.pathname.replace(/\/+$/, '') === '/schichtplan'
 const scannerStandalone = requestedManagementMode === 'scanner'
 if (scannerStandalone) {
   document.documentElement.classList.add('scanner-mode')
@@ -663,6 +679,7 @@ function App() {
   const setActiveTab = (tab) => {
     const userPermissions = currentUser?.permissions || baseTabs
     const allowed = userPermissions.includes(tab)
+      || tab === 'dienstplan'
       || tab === 'zahlungen'
       || (tab === 'mde' && userPermissions.includes('lager'))
       || (tab === 'versand' && (userPermissions.includes('mde') || userPermissions.includes('lager')))
@@ -757,6 +774,11 @@ function App() {
   const [adjustForm, setAdjustForm] = useState({ productId: '', type: 'Bruch', quantity: '', note: '' })
   const [adjustMessage, setAdjustMessage] = useState('')
   const [reports, setReports] = useState(() => readStorage('zyro-reports', []))
+  const [scheduleShifts, setScheduleShifts] = useState(() => readStorage('zyro-schedule', []))
+  const [scheduleWeekStart, setScheduleWeekStart] = useState(() => getScheduleWeekStart())
+  const [scheduleShiftForm, setScheduleShiftForm] = useState(createScheduleShiftForm)
+  const [editingScheduleShiftId, setEditingScheduleShiftId] = useState('')
+  const [scheduleFeedback, setScheduleFeedback] = useState('')
   const [machinebauRecords, setMachinebauRecords] = useState(() => readStorage('zyro-machinebau', []))
   const [machinebauDraft, setMachinebauDraft] = useState(null)
   const [editingMachinebauId, setEditingMachinebauId] = useState('')
@@ -1281,6 +1303,7 @@ function App() {
       'zyro-stock-movements': setStockMovements,
       'zyro-reports': setReports,
       'zyro-machinebau': setMachinebauRecords,
+      'zyro-schedule': setScheduleShifts,
       'zyro-hr-sensitive': setHrSensitiveRecords,
       'zyro-archive-documents': setUploadedDocuments,
       'zyro-orders': setOrders,
@@ -1361,7 +1384,9 @@ function App() {
             || status.sessionUser.permissions?.includes('mde')
             || status.sessionUser.permissions?.includes('lager')
           const requestedMode = requestedManagementMode === 'versand' ? 'versand' : 'mde'
-          setActiveTabState(requestedManagementMode && (requestedMode === 'versand' ? canUseShipment : canUseMde)
+          setActiveTabState(scheduleStandalone
+            ? 'dienstplan'
+            : requestedManagementMode && (requestedMode === 'versand' ? canUseShipment : canUseMde)
             ? requestedMode
             : status.sessionUser.role === 'admin' ? 'dashboard' : status.sessionUser.permissions?.[0] || 'dashboard')
           setProfileForm({
@@ -1469,6 +1494,10 @@ function App() {
   useEffect(() => {
     persistCollection('zyro-reports', reports, authSessionToken)
   }, [reports, authSessionToken])
+
+  useEffect(() => {
+    if (currentUser?.role === 'admin') persistCollection('zyro-schedule', scheduleShifts, authSessionToken)
+  }, [scheduleShifts, authSessionToken, currentUser?.role])
 
   useEffect(() => {
     persistCollection('zyro-machinebau', machinebauRecords, authSessionToken)
@@ -1595,6 +1624,7 @@ function App() {
       'zyro-bottler-details': applyBottlerDetails,
       'zyro-stock-movements': setStockMovements,
       'zyro-reports': setReports,
+      'zyro-schedule': setScheduleShifts,
       'zyro-machinebau': setMachinebauRecords,
       'zyro-hr-sensitive': setHrSensitiveRecords,
       'zyro-archive-documents': setUploadedDocuments,
@@ -1626,6 +1656,7 @@ function App() {
       'zyro-bottler-details': [initialBottlerDetails],
       'zyro-stock-movements': [],
       'zyro-reports': [],
+      'zyro-schedule': [],
       'zyro-machinebau': [],
       'zyro-hr-sensitive': [],
       'zyro-archive-documents': [],
@@ -1929,19 +1960,93 @@ function App() {
   }, [activeTab, currentUser?.role, authSessionToken])
 
   const availableTabs = currentUser?.role === 'admin'
-    ? [...baseTabs, 'shop', 'anfragen', 'postfach', 'admin', 'protokoll', 'finanzen', 'zahlungen', 'kalkulation']
+    ? [...baseTabs, 'dienstplan', 'shop', 'anfragen', 'postfach', 'admin', 'protokoll', 'finanzen', 'zahlungen', 'kalkulation']
     : employeePermissionTabs.filter((tab) => {
       const permissions = currentUser?.permissions || baseTabs
       return permissions.includes(tab)
         || (tab === 'mde' && permissions.includes('lager'))
         || (tab === 'versand' && (permissions.includes('mde') || permissions.includes('lager')))
-    }).concat('zahlungen')
-  const tabs = scannerStandalone
-    ? availableTabs.filter((tab) => tab === 'mde' || tab === 'versand')
-    : availableTabs
+    }).concat('zahlungen', 'dienstplan')
+  const tabs = scheduleStandalone
+    ? availableTabs.filter((tab) => tab === 'dienstplan')
+    : scannerStandalone
+      ? availableTabs.filter((tab) => tab === 'mde' || tab === 'versand')
+      : availableTabs
   const visiblePaymentRequests = currentUser?.role === 'admin'
     ? paymentRequests
     : paymentRequests.filter((request) => String(request.requesterId) === String(currentUser?.id || ''))
+  const scheduleWeekDays = getScheduleWeekDates(scheduleWeekStart)
+  const scheduleWeekDayIds = new Set(scheduleWeekDays.map((day) => day.date))
+  const visibleScheduleShifts = sortScheduleShifts(scheduleShifts.filter((shift) => (
+    scheduleWeekDayIds.has(shift.date)
+    && (currentUser?.role === 'admin' || String(shift.employeeId) === String(currentUser?.id || ''))
+  )))
+  const scheduleEmployees = users.filter((user) => user.role !== 'admin')
+    .sort((left, right) => String(left.name).localeCompare(String(right.name), 'de'))
+  const scheduleWeekLabel = scheduleWeekDays.length
+    ? `${new Intl.DateTimeFormat('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(`${scheduleWeekDays[0].date}T12:00:00`))} – ${new Intl.DateTimeFormat('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(`${scheduleWeekDays[6].date}T12:00:00`))}`
+    : ''
+
+  const saveScheduleShift = (event) => {
+    event.preventDefault()
+    if (currentUser?.role !== 'admin') {
+      setScheduleFeedback('Nur Admins dürfen den Dienstplan ändern.')
+      return
+    }
+    const employee = scheduleEmployees.find((user) => String(user.id) === String(scheduleShiftForm.employeeId))
+    if (!employee) {
+      setScheduleFeedback('Bitte einen gültigen Mitarbeiter auswählen.')
+      return
+    }
+    const shift = {
+      id: editingScheduleShiftId || crypto.randomUUID(),
+      employeeId: String(employee.id),
+      employeeName: String(employee.name || '').trim(),
+      date: scheduleShiftForm.date,
+      startTime: scheduleShiftForm.startTime,
+      endTime: scheduleShiftForm.endTime,
+      breakMinutes: Number(scheduleShiftForm.breakMinutes),
+      location: scheduleShiftForm.location.trim(),
+      notes: scheduleShiftForm.notes.trim(),
+    }
+    const validationMessage = validateShiftDraft(shift, scheduleShifts, editingScheduleShiftId)
+    if (validationMessage) {
+      setScheduleFeedback(validationMessage)
+      return
+    }
+    setScheduleShifts((current) => sortScheduleShifts(editingScheduleShiftId
+      ? current.map((entry) => entry.id === editingScheduleShiftId ? shift : entry)
+      : [...current, shift]))
+    setScheduleWeekStart(getScheduleWeekStart(shift.date))
+    setScheduleShiftForm(createScheduleShiftForm())
+    setEditingScheduleShiftId('')
+    setScheduleFeedback('Schicht wurde gespeichert.')
+  }
+
+  const editScheduleShift = (shift) => {
+    setEditingScheduleShiftId(shift.id)
+    setScheduleShiftForm({
+      employeeId: String(shift.employeeId),
+      date: shift.date,
+      startTime: shift.startTime,
+      endTime: shift.endTime,
+      breakMinutes: String(shift.breakMinutes),
+      location: shift.location || '',
+      notes: shift.notes || '',
+    })
+    setScheduleWeekStart(getScheduleWeekStart(shift.date))
+    setScheduleFeedback('')
+  }
+
+  const deleteScheduleShift = (shift) => {
+    if (currentUser?.role !== 'admin' || !window.confirm(`Schicht für ${shift.employeeName} am ${shift.date} löschen?`)) return
+    setScheduleShifts((current) => current.filter((entry) => entry.id !== shift.id))
+    if (editingScheduleShiftId === shift.id) {
+      setEditingScheduleShiftId('')
+      setScheduleShiftForm(createScheduleShiftForm())
+    }
+    setScheduleFeedback('Schicht wurde gelöscht.')
+  }
 
   const filteredAuditEntries = auditEntries.filter((entry) =>
     (auditActionFilter === 'alle' || entry.action === auditActionFilter)
@@ -6574,7 +6679,7 @@ function App() {
       const result = await window.zyroAuth.login(loginForm)
       setNotificationItems(readUserNotifications(result.user.id))
       setCurrentUser(result.user)
-      setActiveTab(result.user.role === 'admin' ? 'dashboard' : result.user.permissions?.[0] || 'dashboard')
+      setActiveTab(scheduleStandalone ? 'dienstplan' : result.user.role === 'admin' ? 'dashboard' : result.user.permissions?.[0] || 'dashboard')
       setProfileForm({ name: result.user.name || '', email: result.user.email || '', phone: result.user.phone || '', address: result.user.address || '', avatarDataUrl: result.user.avatarDataUrl || '' })
       setAccountForm({ username: result.user.username || '', currentPassword: '', newPassword: '', confirmPassword: '' })
       setAuthSessionToken(result.sessionToken)
@@ -6681,7 +6786,7 @@ function App() {
       return (
         <div className="auth-shell">
           <section className="auth-card" role="status">
-            <div className="auth-header"><div className="brand-mark">Z</div><div><p className="brand-kicker">ZYRO</p><h1>Benutzerkonten werden geladen</h1></div></div>
+            <div className="auth-header"><div className="brand-mark">Z</div><div><p className="brand-kicker">ZYRO</p><h1>{scheduleStandalone ? 'Dienstplan' : 'Benutzerkonten werden geladen'}</h1></div></div>
             {authError && <p className="auth-error">{authError}</p>}
           </section>
         </div>
@@ -6695,7 +6800,7 @@ function App() {
             <div className="brand-mark">Z</div>
             <div>
               <p className="brand-kicker">ZYRO</p>
-              <h1>{authMode === 'register' ? (authStatus?.needsSetup ? 'Admin einrichten' : 'Konto aktivieren') : 'Login'}</h1>
+              <h1>{authMode === 'register' ? (authStatus?.needsSetup ? 'Admin einrichten' : 'Konto aktivieren') : scheduleStandalone ? 'Dienstplan Login' : 'Login'}</h1>
             </div>
           </div>
 
@@ -6729,7 +6834,7 @@ function App() {
               <label>Passwort<input type="password" name="password" value={loginForm.password} onChange={handleLoginInput} autoComplete="current-password" /></label>
               {authError && <p className="auth-error">{authError}</p>}
               <button type="submit" className="primary-button full-width-button">Einloggen</button>
-              {authStatus && <button type="button" className="secondary-button full-width-button" onClick={() => { setAuthMode('register'); setAuthError('') }}>Mit Aktivierungsschlüssel registrieren</button>}
+              {authStatus && !scheduleStandalone && <button type="button" className="secondary-button full-width-button" onClick={() => { setAuthMode('register'); setAuthError('') }}>Mit Aktivierungsschlüssel registrieren</button>}
             </form>
           )}
           {authMode === 'login' && networkStatus.mode === 'local' && window.zyroCloud && (
@@ -6750,7 +6855,7 @@ function App() {
   }
 
   return (
-    <div className={scannerStandalone ? 'zyro-app-shell scanner-standalone' : 'zyro-app-shell'}>
+    <div className={`zyro-app-shell${scannerStandalone ? ' scanner-standalone' : ''}${scheduleStandalone ? ' schedule-standalone' : ''}`}>
       {callInfo && (
         <section className="call-notification" role={callInfo.status === 'incoming' ? 'alert' : 'status'} aria-live="assertive">
           <div>
@@ -7177,6 +7282,7 @@ function App() {
               {tab === 'versand' && 'Versand & Tracking'}
               {tab === 'chargen' && 'Chargen'}
               {tab === 'maschinenbau' && 'Maschinenbau'}
+              {tab === 'dienstplan' && 'Dienstplan'}
               {tab === 'admin' && 'Admin'}
             </button>
           ))}
@@ -7186,8 +7292,8 @@ function App() {
       <main className="main-panel">
         <header className="main-header">
           <div>
-            <p className="eyebrow">{activeTab === 'maschinenbau' ? 'Maschinenbau · Technik & Fertigung' : 'Getränkeproduktion'}</p>
-            <h1>{activeTab === 'maschinenbau' ? 'Maschinenbau & Fertigung' : 'ZYRO Betriebsübersicht'}</h1>
+            <p className="eyebrow">{activeTab === 'maschinenbau' ? 'Maschinenbau · Technik & Fertigung' : activeTab === 'dienstplan' ? 'Personalplanung' : 'Getränkeproduktion'}</p>
+            <h1>{activeTab === 'maschinenbau' ? 'Maschinenbau & Fertigung' : activeTab === 'dienstplan' ? 'Dienstplan' : 'ZYRO Betriebsübersicht'}</h1>
           </div>
           <div className="header-actions">
             <button type="button" className="profile-summary-button" onClick={() => setActiveTab('profil')} title="Persönliche Einstellungen">
@@ -7660,6 +7766,140 @@ function App() {
               )}
             </section>
           </>
+        )}
+
+        {activeTab === 'dienstplan' && (
+          <section className="schedule-workspace">
+            <div className="panel schedule-calendar-panel">
+              <div className="panel-header">
+                <div>
+                  <p className="eyebrow">Personalplanung</p>
+                  <h2>Dienstplan</h2>
+                </div>
+                <span>{currentUser.role === 'admin' ? 'Gesamtübersicht' : 'Meine Schichten'}</span>
+              </div>
+              <div className="schedule-week-toolbar">
+                <button type="button" className="secondary-button small" onClick={() => {
+                  const date = new Date(`${scheduleWeekStart}T12:00:00`)
+                  date.setDate(date.getDate() - 7)
+                  setScheduleWeekStart(getScheduleWeekStart(date))
+                }}>Vorherige Woche</button>
+                <strong>{scheduleWeekLabel}</strong>
+                <button type="button" className="secondary-button small" onClick={() => {
+                  const date = new Date(`${scheduleWeekStart}T12:00:00`)
+                  date.setDate(date.getDate() + 7)
+                  setScheduleWeekStart(getScheduleWeekStart(date))
+                }}>Nächste Woche</button>
+                <button type="button" className="secondary-button small" onClick={() => setScheduleWeekStart(getScheduleWeekStart())}>Diese Woche</button>
+              </div>
+              <p className="schedule-privacy-note">
+                {currentUser.role === 'admin'
+                  ? 'Mitarbeiter melden sich online unter /schichtplan mit ihren bestehenden Benutzerdaten an. Dort sehen sie ausschließlich ihre eigenen Schichten.'
+                  : 'Du siehst hier nur deine eigenen Schichten. Melde dich mit denselben Benutzerdaten wie in der Desktop-App an.'}
+              </p>
+              <div className="schedule-week-grid">
+                {scheduleWeekDays.map((day) => {
+                  const dayShifts = visibleScheduleShifts.filter((shift) => shift.date === day.date)
+                  return (
+                    <article className="schedule-day" key={day.date}>
+                      <div className="schedule-day-heading">
+                        <strong>{day.label}</strong>
+                        <span>{day.dayLabel}</span>
+                      </div>
+                      {dayShifts.length === 0
+                        ? <p className="schedule-empty-day">Keine Schicht geplant</p>
+                        : dayShifts.map((shift) => (
+                          <div className="schedule-shift" key={shift.id}>
+                            <strong>{shift.startTime}–{shift.endTime}</strong>
+                            <span>{shift.employeeName}</span>
+                            <small>{shift.breakMinutes} Min. Pause{shift.location ? ` · ${shift.location}` : ''}</small>
+                            {shift.notes && <p>{shift.notes}</p>}
+                            {currentUser.role === 'admin' && (
+                              <div className="schedule-shift-actions">
+                                <button type="button" className="secondary-button small" onClick={() => editScheduleShift(shift)}>Bearbeiten</button>
+                                <button type="button" className="danger-button small" onClick={() => deleteScheduleShift(shift)}>Löschen</button>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                    </article>
+                  )
+                })}
+              </div>
+              {visibleScheduleShifts.length === 0 && (
+                <p className="schedule-empty-week">
+                  {currentUser.role === 'admin'
+                    ? 'Für diese Woche sind noch keine Schichten eingetragen.'
+                    : 'Für diese Woche sind keine Schichten für dich eingetragen.'}
+                </p>
+              )}
+            </div>
+
+            {currentUser.role === 'admin' && (
+              <div className="panel schedule-editor-panel">
+                <div className="panel-header">
+                  <h2>{editingScheduleShiftId ? 'Schicht bearbeiten' : 'Schicht eintragen'}</h2>
+                  <span>{scheduleShifts.length} Schichten</span>
+                </div>
+                {scheduleEmployees.length === 0 ? (
+                  <div className="schedule-empty-week">
+                    Bitte zuerst unter Admin Mitarbeiterkonten anlegen. Diese Konten können sich anschließend online anmelden.
+                  </div>
+                ) : (
+                  <form className="form-grid" onSubmit={saveScheduleShift}>
+                    <label className="full-width">
+                      Mitarbeiter
+                      <select
+                        value={scheduleShiftForm.employeeId}
+                        onChange={(event) => setScheduleShiftForm((current) => ({ ...current, employeeId: event.target.value }))}
+                        required
+                      >
+                        <option value="">Mitarbeiter auswählen</option>
+                        {scheduleEmployees.map((employee) => (
+                          <option key={employee.id} value={employee.id}>{employee.name}{employee.username ? ` · ${employee.username}` : ''}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Datum
+                      <input type="date" value={scheduleShiftForm.date} onChange={(event) => setScheduleShiftForm((current) => ({ ...current, date: event.target.value }))} required />
+                    </label>
+                    <label>
+                      Einsatzort / Bereich
+                      <input type="text" value={scheduleShiftForm.location} onChange={(event) => setScheduleShiftForm((current) => ({ ...current, location: event.target.value }))} maxLength={120} placeholder="Optional" />
+                    </label>
+                    <label>
+                      Beginn
+                      <input type="time" value={scheduleShiftForm.startTime} onChange={(event) => setScheduleShiftForm((current) => ({ ...current, startTime: event.target.value }))} required />
+                    </label>
+                    <label>
+                      Ende
+                      <input type="time" value={scheduleShiftForm.endTime} onChange={(event) => setScheduleShiftForm((current) => ({ ...current, endTime: event.target.value }))} required />
+                    </label>
+                    <label>
+                      Pause (Minuten)
+                      <input type="number" min="0" max="360" step="5" value={scheduleShiftForm.breakMinutes} onChange={(event) => setScheduleShiftForm((current) => ({ ...current, breakMinutes: event.target.value }))} required />
+                    </label>
+                    <label className="full-width">
+                      Hinweis
+                      <textarea value={scheduleShiftForm.notes} onChange={(event) => setScheduleShiftForm((current) => ({ ...current, notes: event.target.value }))} maxLength={500} placeholder="Optionaler Hinweis zur Schicht" />
+                    </label>
+                    {scheduleFeedback && <p className="schedule-feedback full-width" role="status">{scheduleFeedback}</p>}
+                    <button type="submit" className="primary-button full-width-button">
+                      {editingScheduleShiftId ? 'Änderungen speichern' : 'Schicht eintragen'}
+                    </button>
+                    {editingScheduleShiftId && (
+                      <button type="button" className="secondary-button full-width-button" onClick={() => {
+                        setEditingScheduleShiftId('')
+                        setScheduleShiftForm(createScheduleShiftForm())
+                        setScheduleFeedback('')
+                      }}>Abbrechen</button>
+                    )}
+                  </form>
+                )}
+              </div>
+            )}
+          </section>
         )}
 
         {activeTab === 'dashboard' && (

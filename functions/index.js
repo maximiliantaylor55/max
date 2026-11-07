@@ -39,6 +39,7 @@ const { validateElsterSetupEntries } = require('./elster-validation.cjs')
 const { validateCompanyDetailsEntries, defaultCompanyDetails } = require('./company-details.cjs')
 const { validateBottlerDetailsEntries } = require('./bottler-details.cjs')
 const { validateSalesDocumentEmail } = require('./sales-document-email.cjs')
+const { filterShiftsForEmployee, validateShiftSchedule } = require('./shift-schedule.cjs')
 const { normalizeEmailAddress, canonicalEmailAddress } = require('./email-address.cjs')
 const { describeSmtpFailure, ensureRecipientsAccepted, sendWithTransientRetry } = require('./email-delivery.cjs')
 const {
@@ -1671,6 +1672,7 @@ const cloudDataKeys = new Set([
   'zyro-stock-movements',
   'zyro-reports',
   'zyro-machinebau',
+  'zyro-schedule',
   'zyro-hr-sensitive',
   'zyro-archive-documents',
   'zyro-delete-requests',
@@ -2116,6 +2118,10 @@ const validateWebAppWrite = (key, currentValue, nextValue, actor) => {
   }
   if (key === 'zyro-payment-requests') {
     return validatePaymentRequestUpdate(currentValue, nextValue, actor)
+  }
+  if (key === 'zyro-schedule') {
+    if (actor.role !== 'admin') throw new Error('Nur Admins dürfen den Dienstplan ändern.')
+    return validateShiftSchedule(nextValue)
   }
   if (key === 'zyro-lab-tests') {
     const permissions = Array.isArray(actor.permissions) ? actor.permissions : defaultWebAppPermissions
@@ -3546,6 +3552,9 @@ exports.webAppData = onRequest({
     }
     if (action === 'get') {
       const result = await readCloudAppData(key)
+      if (key === 'zyro-schedule' && actor.role !== 'admin') {
+        result.value = filterShiftsForEmployee(result.value, actor.id)
+      }
       if (key === 'zyro-payment-requests' && actor.role !== 'admin') {
         result.value = (Array.isArray(result.value) ? result.value : [])
           .filter((entry) => String(entry.requesterId) === String(actor.id))
@@ -3553,6 +3562,9 @@ exports.webAppData = onRequest({
       return response.json(result)
     }
     if (action !== 'put') return response.status(400).json({ error: 'Aktion ungültig.' })
+    if (key === 'zyro-schedule' && actor.role !== 'admin') {
+      return response.status(403).json({ error: 'Nur Admins dürfen den Dienstplan ändern.' })
+    }
     if (!webAppWritableKeys.has(key)) return response.status(403).json({ error: 'Dieser Datenbereich ist schreibgeschützt.' })
     if (key === 'zyro-payment-settings' && actor.role !== 'admin') {
       return response.status(403).json({ error: 'Das Zahlungskonto darf nur von einem Admin verwaltet werden.' })

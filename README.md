@@ -6,6 +6,10 @@
 
 Windows-Updates werden über den eingebauten Updater aus Firebase Hosting geladen. In der installierten macOS-App öffnet **Mac-Update aus der Cloud laden** die Firebase-Downloadseite mit den aktuellen Installern für Apple Silicon und Intel. Lade die passende DMG und ersetze die App im Programme-Ordner. macOS-Hintergrundupdates und automatische Installation erfordern ein Apple-Developer-ID-Zertifikat sowie signierte und notarisierte Builds; ohne diese Signierung erfolgt die Aktualisierung manuell über den Cloud-Installer.
 
+### Dienstplan
+
+Admins tragen Schichten in der Desktop-App unter **Dienstplan** ein. Nach der Cloud-Synchronisierung melden sich Mitarbeiter online unter `/schichtplan` mit ihren bestehenden Desktop-Benutzerdaten an. Dort sehen sie ausschließlich die eigenen Schichten; nur Admins können Schichten anlegen, bearbeiten oder löschen.
+
 ### Webshop-Versand
 
 Im Shop wird Paketversand für Privat- und Geschäftskunden ausschließlich mit DPD berechnet. Geschäftskunden können bis zu sechs 24er-Trays per DPD bestellen; die Trays werden auf höchstens drei Pakete mit maximal zwei Trays und 31,5 kg je Paket verteilt. Die DPD-Gewichtspreise werden pro Paket berechnet. Größere oder nicht paketfähige Bestellungen gehen per Spedition. Die DPD-Gewichtspreise und Traygrenze sowie der Speditionspreis (standardmäßig 85,00 € je Palette für bis zu 64 Trays) können in der Desktop-App unter **Shop → Versandkosten** angepasst werden. Die bisherigen Paketpreise dienen als Ausgangswerte und müssen mit den geltenden DPD-Vertragspreisen abgeglichen werden.

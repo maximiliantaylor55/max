@@ -153,6 +153,8 @@
       },
       { "source": "/tracking", "destination": "/tracking.html" },
       { "source": "/tracking/**", "destination": "/tracking.html" },
+      { "source": "/schichtplan", "destination": "/management/index.html" },
+      { "source": "/schichtplan/**", "destination": "/management/index.html" },
       { "source": "/management", "destination": "/management/index.html" },
       { "source": "/management/**", "destination": "/management/index.html" },
       { "source": "/", "destination": "/brand.html" }
@@ -180,6 +182,14 @@
       },
       {
         "source": "/management/**",
+        "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }]
+      },
+      {
+        "source": "/schichtplan",
+        "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }]
+      },
+      {
+        "source": "/schichtplan/**",
         "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }]
       },
       {

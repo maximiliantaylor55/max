@@ -1237,6 +1237,121 @@
   white-space: nowrap;
 }
 
+.schedule-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(310px, 0.8fr);
+  align-items: start;
+  gap: 18px;
+}
+
+.schedule-calendar-panel,
+.schedule-editor-panel {
+  min-width: 0;
+}
+
+.schedule-week-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.schedule-week-toolbar strong {
+  padding: 0 8px;
+  color: #e2e8f0;
+}
+
+.schedule-privacy-note,
+.schedule-empty-week {
+  margin: 0 0 14px;
+  padding: 12px;
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.35);
+  color: #cbd5e1;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.schedule-week-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.schedule-day {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 10px;
+  background: rgba(2, 8, 23, 0.24);
+}
+
+.schedule-day-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: #e2e8f0;
+  text-transform: capitalize;
+}
+
+.schedule-day-heading span,
+.schedule-empty-day {
+  color: #94a3b8;
+  font-size: 0.8rem;
+}
+
+.schedule-empty-day {
+  margin: 0;
+}
+
+.schedule-shift {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 10px;
+  border-left: 3px solid #34d399;
+  border-radius: 6px;
+  background: rgba(52, 211, 153, 0.08);
+  overflow-wrap: anywhere;
+}
+
+.schedule-shift > strong {
+  color: #6ee7b7;
+  font-size: 1rem;
+}
+
+.schedule-shift > small {
+  color: #94a3b8;
+}
+
+.schedule-shift > p {
+  margin: 4px 0 0;
+  color: #cbd5e1;
+  white-space: pre-wrap;
+}
+
+.schedule-shift-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.schedule-shift-actions button {
+  width: auto;
+}
+
+.schedule-feedback {
+  margin: 0;
+  color: #6ee7b7;
+  font-size: 0.85rem;
+}
+
 .order-scan-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -3894,3 +4009,25 @@ html.scanner-mode body {
 @media(max-width:700px){.machinebau-list-tools{grid-template-columns:1fr}.machinebau-panel>.panel-header{flex-direction:column}.machinebau-record-heading{flex-direction:column}.machinebau-status{white-space:normal}}
 .machinebau-hr-panel{display:grid;gap:16px;border-color:rgba(251,191,36,.25)}.machinebau-hr-panel>.panel-header{align-items:flex-start}.machinebau-hr-unlock{display:grid;grid-template-columns:minmax(220px,1fr) minmax(220px,1fr) auto;align-items:end;gap:12px}.machinebau-hr-unlock label{display:grid;gap:6px}.machinebau-privacy-note{grid-column:1/-1;margin:0;color:#fcd34d;font-size:.84rem;line-height:1.55}.machinebau-hr-toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
 @media(max-width:700px){.machinebau-hr-unlock{grid-template-columns:1fr}.machinebau-privacy-note{grid-column:auto}.machinebau-hr-panel>.panel-header{flex-direction:row}}
+
+@media (max-width: 980px) {
+  .schedule-workspace {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .schedule-week-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .schedule-week-toolbar > strong {
+    flex-basis: 100%;
+    text-align: center;
+    order: -1;
+  }
+
+  .schedule-week-toolbar .secondary-button.small {
+    flex: 1 1 auto;
+  }
+}

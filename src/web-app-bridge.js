@@ -20,6 +20,7 @@ const dataKeys = [
   'zyro-stock-movements',
   'zyro-reports',
   'zyro-machinebau',
+  'zyro-schedule',
   'zyro-hr-sensitive',
   'zyro-archive-documents',
   'zyro-delete-requests',
@@ -131,6 +132,7 @@ const mergeRecords = (key, base, local, remote) => {
 const scannerMode = new URLSearchParams(window.location.search).get('mode') === 'scanner'
 // Am Scanner schreibt nur die Cloud-Funktion (MDE-Buchungen); lokale Stände werden immer durch die Cloud ersetzt.
 const cloudOwnedKeys = new Set(['zyro-products', 'zyro-sales-documents', 'zyro-stock-movements', 'zyro-purchase-orders'])
+const employeeReadOnlyKeys = new Set(['zyro-schedule'])
 
 const syncCloudData = async (force = false, requestedKeys = null) => {
   if (!window.localStorage.getItem(sessionTokenKey)) return
@@ -152,10 +154,13 @@ const syncCloudData = async (force = false, requestedKeys = null) => {
     if (userId && previousUserId !== userId) {
       saveLocalValue('zyro-payment-requests', null)
       saveLocalValue('zyro-payment-settings', null)
+      saveLocalValue('zyro-schedule', null)
       delete state.revisions['zyro-payment-requests']
       delete state.bases['zyro-payment-requests']
       delete state.revisions['zyro-payment-settings']
       delete state.bases['zyro-payment-settings']
+      delete state.revisions['zyro-schedule']
+      delete state.bases['zyro-schedule']
       window.localStorage.setItem('zyro-web-sync-user-id', userId)
     }
     const manifest = await requestJson('/api/management/data', {
@@ -164,6 +169,21 @@ const syncCloudData = async (force = false, requestedKeys = null) => {
     })
     for (const key of requestedKeys || getAccessibleDataKeys()) {
       const remoteRevision = Number(manifest.keys?.[key]?.revision) || 0
+      const readOnlyForEmployee = employeeReadOnlyKeys.has(key) && readCachedUser()?.role !== 'admin'
+      if (readOnlyForEmployee) {
+        const knownRevision = Number(state.revisions[key]) || 0
+        if (state.bases[key] === undefined || remoteRevision !== knownRevision) {
+          const fetched = await requestJson('/api/management/data', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'get', key }),
+          })
+          const value = Array.isArray(fetched.value) ? fetched.value : []
+          saveLocalValue(key, value)
+          state.revisions[key] = fetched.revision
+          state.bases[key] = JSON.stringify(value)
+        }
+        continue
+      }
       if (scannerMode && cloudOwnedKeys.has(key)) {
         if (remoteRevision > 0 && (state.bases[key] === undefined || remoteRevision !== Number(state.revisions[key]) || JSON.stringify(localValue(key)) !== state.bases[key])) {
           const fetched = await requestJson('/api/management/data', {
@@ -504,6 +524,7 @@ if (typeof window !== 'undefined' && !window.zyroAuth) {
       return syncCloudData(true)
     },
     get: (key) => {
+      if (key === 'zyro-schedule' && !readCachedUser()) return { found: true, value: [] }
       if (key === 'zyro-lab-tests'
         && readCachedUser()?.role !== 'admin'
         && !readCachedUser()?.permissions?.includes('rezepturen')) return { found: false, value: null }
@@ -524,6 +545,14 @@ if (typeof window !== 'undefined' && !window.zyroAuth) {
       const stored = window.localStorage.getItem(key)
       if (stored === null) return { found: false, value: null }
       const value = readJson(key)
+      if (key === 'zyro-schedule' && readCachedUser()?.role !== 'admin') {
+        return {
+          found: true,
+          value: Array.isArray(value)
+            ? value.filter((shift) => String(shift.employeeId) === String(readCachedUser()?.id || ''))
+            : [],
+        }
+      }
       if (key === 'zyro-payment-requests' && readCachedUser()?.role !== 'admin') {
         return {
           found: true,
@@ -533,6 +562,9 @@ if (typeof window !== 'undefined' && !window.zyroAuth) {
       return { found: true, value }
     },
     set: async (key, value) => {
+      if (key === 'zyro-schedule' && readCachedUser()?.role !== 'admin') {
+        return { success: false, message: 'Nur Admins dürfen den Dienstplan ändern.' }
+      }
       if (key === 'zyro-lab-tests'
         && readCachedUser()?.role !== 'admin'
         && !readCachedUser()?.permissions?.includes('rezepturen')) {
@@ -605,7 +637,10 @@ if (typeof window !== 'undefined' && !window.zyroAuth) {
       }
       return {
         revision: `web-${localRevision}`,
-        data: Object.fromEntries(getAccessibleDataKeys().map((key) => [key, localValue(key)])),
+        data: Object.fromEntries(getAccessibleDataKeys().map((key) => [
+          key,
+          key === 'zyro-schedule' && !readCachedUser() ? [] : localValue(key),
+        ])),
       }
     },
     getNetworkStatus: async () => ({
