@@ -15,7 +15,7 @@
     "preview": "vite preview",
     "desktop": "npm run build && electron .",
     "desktop:pack": "npm run build && electron-builder --win",
-    "desktop:pack:mac": "npm run build && electron-builder --mac --universal"
+    "desktop:pack:mac": "npm run build && electron-builder --mac --x64 --arm64 --universal"
   },
   "dependencies": {
     "@google/genai": "^2.30.0",
