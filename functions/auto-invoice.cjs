@@ -77,7 +77,9 @@ const createInvoiceFromOrder = ({ order, documents, responsibleName = 'Scanner',
     quantity: order.quantity ?? 1,
     unitPrice: order.unitPrice ?? 0,
     paymentReference: number,
-    paymentMethod: order.paymentMethod || 'Vorkasse',
+    paymentMethod: order.paymentMethod === 'paypal'
+      ? 'PayPal'
+      : order.paymentMethod === 'stripe' ? 'Online (Stripe)' : order.paymentMethod || 'Vorkasse',
     paymentStatus: paid ? 'paid' : 'pending',
     shippingMethod: order.shippingMethod || '',
     responsibleName,

@@ -1,0 +1,9 @@
+/* ZYRO Schriften – lokal gehostet (keine Verbindung zu Google Fonts).
+   Inter & Inter Display von Rasmus Andersson, SIL Open Font License 1.1 (siehe LICENSE.txt). */
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/inter-regular.woff') format('woff'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/inter-medium.woff') format('woff'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 600; font-display: swap; src: url('/fonts/inter-semibold.woff') format('woff'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/inter-bold.woff') format('woff'); }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 800; font-display: swap; src: url('/fonts/inter-extrabold.woff') format('woff'); }
+@font-face { font-family: 'Inter Display'; font-style: normal; font-weight: 500 600; font-display: swap; src: url('/fonts/inter-display-semibold.woff') format('woff'); }
+@font-face { font-family: 'Inter Display'; font-style: normal; font-weight: 700 900; font-display: swap; src: url('/fonts/inter-display-bold.woff') format('woff'); }

@@ -1,7 +1,7 @@
 {
   "name": "zyro-programm",
   "private": true,
-  "version": "1.1.44",
+  "version": "1.3.0",
   "description": "Lokale Desktop-Anwendung für Getränkeproduktion und Verkaufsbelege",
   "author": "Liberty Street Food GmbH",
   "type": "module",
@@ -10,7 +10,7 @@
     "dev": "vite",
     "build": "vite build",
     "build:web": "vite build --config vite.web.config.js",
-    "deploy:web": "npm run build:web && firebase deploy --only functions:call-relay:cloudCallRelay,functions:cloudData,functions:webAppLogin,functions:webAppAuth,functions:webAppData,functions:webAppFinanceReceipt,functions:webAppMde,functions:publicShipmentTracking,functions:customerProductReview,functions:sendDeliveredReviewRequests,functions:getPublicShop,functions:submitPublicOrder,functions:stripeWebhook,functions:manageBrandMail,functions:manageMailbox,functions:registerCustomerPortal,functions:loginCustomerPortal,functions:verifyCustomerPortalEmail,functions:requestCustomerPasswordReset,functions:resetCustomerPortalPassword,functions:requestCustomerPortalCode,functions:verifyCustomerPortalCode,functions:listCustomerPortalOrders,functions:downloadCustomerPortalInvoice,functions:customerPortalProfile,functions:listBusinessCustomers,functions:listCustomerAccounts,functions:deleteCustomerAccount,functions:updateBusinessCustomer,functions:sendPublicInvoiceEmail,functions:cleanupPublicOrderData,hosting --project zyro-78855",
+    "deploy:web": "npm run build:web && firebase deploy --only functions:call-relay:cloudCallRelay,functions:cloudData,functions:webAppLogin,functions:webAppAuth,functions:webAppData,functions:webAppFinanceReceipt,functions:paywiseInkasso,functions:paywiseWebhook,functions:webAppMde,functions:publicShipmentTracking,functions:customerProductReview,functions:sendDeliveredReviewRequests,functions:getPublicShop,functions:submitPublicOrder,functions:stripeWebhook,functions:capturePaypalOrder,functions:paypalWebhook,functions:manageBrandMail,functions:manageMailbox,functions:registerCustomerPortal,functions:loginCustomerPortal,functions:verifyCustomerPortalEmail,functions:requestCustomerPasswordReset,functions:resetCustomerPortalPassword,functions:requestCustomerPortalCode,functions:verifyCustomerPortalCode,functions:listCustomerPortalOrders,functions:downloadCustomerPortalInvoice,functions:customerPortalProfile,functions:listBusinessCustomers,functions:listCustomerAccounts,functions:deleteCustomerAccount,functions:updateBusinessCustomer,functions:sendPublicInvoiceEmail,functions:cleanupPublicOrderData,hosting --project zyro-78855",
     "lint": "oxlint",
     "preview": "vite preview",
     "desktop": "npm run build && electron .",

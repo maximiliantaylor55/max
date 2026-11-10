@@ -6,6 +6,17 @@
 
 Windows-Updates werden über den eingebauten Updater aus Firebase Hosting geladen. In der installierten macOS-App öffnet **Mac-Update aus der Cloud laden** die Firebase-Downloadseite mit den aktuellen Installern für Apple Silicon und Intel. Lade die passende DMG und ersetze die App im Programme-Ordner. macOS-Hintergrundupdates und automatische Installation erfordern ein Apple-Developer-ID-Zertifikat sowie signierte und notarisierte Builds; ohne diese Signierung erfolgt die Aktualisierung manuell über den Cloud-Installer.
 
+### Behördenmappe & Formulare (ab 1.2.0)
+
+Im **Dokumentenarchiv** steht oben die **Behördenmappe** mit 30 Vorlagen: A–F für Lebensmittelsicherheit (Registrierung, HACCP, Hygiene, Wareneingang, Herstellungsprotokoll, Chargenfreigabe, LMIV-Etikett, Labor, Reklamation, Rückruf, Lohnherstellung) und G für Verwaltung (Arbeitszeitnachweis, Urlaubsantrag, Reisekosten, Gesellschafterversammlung, Inventur, Lieferantenbewertung, Quittung, Kassenbuch, Vollmacht, Gesprächsnotiz, Besprechungsprotokoll, Musterversand). Firmen- und Lohnabfüllerdaten kommen automatisch aus den Firmendaten. Felder werden direkt im Formular ausgefüllt, Kästchen per Klick angehakt. Ausgefüllte Formulare werden unter `zyro-qm-documents` gespeichert und über Firebase auf allen Geräten abgeglichen; gespeichert wird nur Text. Löschen dürfen nur Admins. „Komplette Behördenmappe drucken“ gibt alle Vorlagen A–F als PDF/Druck aus.
+
+### Firebase-Kosten (ab 1.2.0)
+
+- Web-App: Datenabgleich alle 20 s und nur bei sichtbarem Fenster; beim Zurückwechseln wird sofort abgeglichen.
+- Telefon-Abfrage: früher ohne Pause (mehrere Abfragen pro Sekunde je offenem Fenster). Jetzt 3 s im Leerlauf, 8 s im Hintergrund, 0,4 s während eines Anrufs.
+- Cloud Functions halten Benutzerdaten je Revision und Sitzungen 60 s im Speicher und lesen dadurch deutlich weniger Firestore-Dokumente.
+- Desktop-App: Abruf fremder Änderungen alle 20 s; eigene Änderungen werden weiterhin sofort hochgeladen.
+
 ### Dienstplan
 
 Admins tragen Schichten in der Desktop-App unter **Dienstplan** ein und können dabei auch Admin-Konten auswählen. Nach der Cloud-Synchronisierung melden sich Mitarbeiter online unter `/schichtplan` mit ihren bestehenden Desktop-Benutzerdaten an. Dort sehen sie ausschließlich die eigenen Schichten; nur Admins können Schichten anlegen, bearbeiten oder löschen. Mitarbeiter können dort Schichttausch, Urlaub, Krankmeldung oder sonstige Abwesenheit beantragen. Ein Schichttausch benötigt die Zustimmung des Kollegen und anschließend die Freigabe durch einen Admin; Abwesenheiten entscheidet ein Admin. Bei Krankmeldungen sind keine Diagnose oder medizinischen Angaben erforderlich.
@@ -105,11 +116,27 @@ Admins können unter **Admin → Lohnabfüller** Name, Straße und PLZ/Ort ände
 
 Unter **Kunden** zeigt eine Europa-Karte Kunden mit gespeicherter Rechnungsadresse auf Ortsebene. Für die Ortssuche werden nur Postleitzahl und Ort an Photon übermittelt; vollständige Anschriften, Namen und Kontaktdaten werden nicht an den Geocoder gesendet. Straßen-/Hauspunkte werden ausgeschlossen, bevorzugt wird der Mittelpunkt des Postleitzahlgebiets. Die Koordinaten werden lokal im Browser zwischengespeichert. Die Kartenkacheln werden von OpenStreetMap geladen. Ohne Internetverbindung sind Karte und Ortssuche nicht verfügbar.
 
+Im Bereich **Kundenbriefe** lassen sich Briefe an gespeicherte Kunden verfassen und als Entwurf speichern. Name und Anschrift werden aus dem Kundenstamm übernommen und können angepasst werden. **Drucken** erzeugt ein A4-Blatt mit dem Anschriftenfeld an der Position eines Fensterumschlags; im Druckdialog bei 100 % bzw. „Tatsächliche Größe“ drucken.
+
 Admins können einen gespeicherten Kundendatensatz aus der Kundenliste löschen. Rechnungen und Aufträge bleiben als historische Belege erhalten.
+
+### Paywise Inkasso
+
+Admins können eine als **Überfällig** markierte Rechnung unter **Verkauf** manuell an [Paywise](https://docs.paywise.de/api-docs/overview) übergeben. Vor der Übermittlung werden Schuldnerart, Identität, Anschrift, Paywise-Rechtsgrund, Verzugsdatum und die Bestätigungen zu erbrachter Leistung, unbestrittener Forderung und offenem Gesamtbetrag geprüft. Der Auftrag wird erst nach Bestätigung eingereicht; Paywise entscheidet anschließend über die Annahme. Der Vorgang wird serverseitig gegen doppelte Übergaben geschützt. API-Schlüssel niemals in App-Daten oder Quellcode speichern.
+
+Wurde ein Schlüssel in einem Chat oder an anderer Stelle offengelegt, diesen zuerst im Paywise-Portal widerrufen und einen neuen Schlüssel erzeugen. Den neuen Schlüssel interaktiv als Firebase Secret setzen und nur die Funktion sowie Hosting bereitstellen:
+
+```powershell
+firebase functions:secrets:set PAYWISE_API_KEY --project zyro-78855
+npm run build:web
+firebase deploy --only functions:paywiseInkasso,hosting --project zyro-78855
+```
+
+Sandbox- und Produktionsschlüssel sind getrennt; die App wählt anhand des `pw_sbx_`-Präfixes automatisch den Sandbox-Endpunkt. Zuerst mit einem Paywise-Sandboxschlüssel testen.
 
 ### Finanzbereich, BWA und UStVA-Vorschau
 
-Admins finden unter **Finanzen** die Erfassung von Einnahmen und Ausgaben sowie eine Monatsauswertung auf Ist-Basis. Admins können Mitarbeitern das Modul **Finanzen** unter **Admin → Mitglieder** ausdrücklich freigeben; diese Berechtigung erlaubt Anzeigen, Erfassen und Bearbeiten, während das Löschen Admins vorbehalten bleibt. Zu jeder Buchung können bis zu fünf Belege als PDF, JPG oder PNG (jeweils maximal 10 MB) in den privaten Cloud-Speicher in der EU geladen und wieder heruntergeladen werden. Die Dateien sind nicht öffentlich und nur mit Finanzen-Berechtigung abrufbar; sie sind nicht Ende-zu-Ende-verschlüsselt. Beim Löschen einer Buchung durch einen Admin werden die zugehörigen Cloud-Dateien ebenfalls gelöscht. Für die Umsatzsteuerberechnung muss bei Einnahmen das tatsächliche Zahlungsdatum eingetragen werden; bezahlte Rechnungen müssen als Einnahme erfasst werden. Vorsteuer wird in der Vorschau nur für Ausgaben mit vorhandenem Beleg und Belegdatum im ausgewählten Monat berücksichtigt. Die Auswertung lässt sich als CSV exportieren oder drucken bzw. als PDF speichern.
+Admins finden unter **Finanzen** die Erfassung von Einnahmen und Ausgaben sowie eine Monatsauswertung auf Ist-Basis. Ausgestellte Rechnungen werden zusätzlich nach Rechnungsdatum separat in der Monatsauswertung angezeigt; sie fließen erst nach bestätigtem Zahlungseingang und Übernahme als Buchung in die zahlungsbasierten BWA- und UStVA-Summen ein. Admins können Mitarbeitern das Modul **Finanzen** unter **Admin → Mitglieder** ausdrücklich freigeben; diese Berechtigung erlaubt Anzeigen, Erfassen und Bearbeiten, während das Löschen Admins vorbehalten bleibt. Zu jeder Buchung können bis zu fünf Belege als PDF, JPG oder PNG (jeweils maximal 10 MB) in den privaten Cloud-Speicher in der EU geladen und wieder heruntergeladen werden. Die Dateien sind nicht öffentlich und nur mit Finanzen-Berechtigung abrufbar; sie sind nicht Ende-zu-Ende-verschlüsselt. Beim Löschen einer Buchung durch einen Admin werden die zugehörigen Cloud-Dateien ebenfalls gelöscht. Für die Umsatzsteuerberechnung muss bei Einnahmen das tatsächliche Zahlungsdatum eingetragen werden; bezahlte Rechnungen müssen als Einnahme erfasst werden. Vorsteuer wird in der Vorschau nur für Ausgaben mit vorhandenem Beleg und Belegdatum im ausgewählten Monat berücksichtigt. Die Auswertung lässt sich als CSV exportieren oder drucken bzw. als PDF speichern.
 
 ### Einkauf und Wareneingang
 

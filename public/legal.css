@@ -1,6 +1,6 @@
 :root {
   color-scheme: light;
-  font-family: 'DM Sans', 'Segoe UI', sans-serif;
+  font-family: 'Inter', 'Segoe UI', sans-serif;
   color: #241910;
   background: #f5f0e8;
   font-synthesis: none;
@@ -81,6 +81,12 @@ a { color: #754a2d; text-underline-offset: 3px; }
 .legal-main h2 {
   margin: 0 0 12px;
   font-size: 1.05rem;
+}
+
+.legal-main h3 {
+  margin: 20px 0 4px;
+  color: #241910;
+  font-size: 0.95rem;
 }
 
 .legal-main p {

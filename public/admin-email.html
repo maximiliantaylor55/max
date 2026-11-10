@@ -9,7 +9,7 @@
     <meta name="robots" content="noindex, nofollow">
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="stylesheet" href="/admin-email.css?v=2" />
-    <script src="/admin-email.js" defer></script>
+    <script src="/admin-email.js?v=2" defer></script>
   </head>
   <body>
     <main class="admin-shell">
@@ -87,6 +87,29 @@
           <p id="stripe-status" class="field-hint">Stripe wird geladen …</p>
           <div class="button-row">
             <button id="stripe-button" class="button button-secondary" type="button">Stripe speichern</button>
+          </div>
+
+          <div class="form-divider"></div>
+          <label for="paypal-client-id">PayPal Client-ID</label>
+          <input id="paypal-client-id" type="text" maxlength="255" autocomplete="off" />
+          <label for="paypal-client-secret">PayPal Secret</label>
+          <input id="paypal-client-secret" type="password" maxlength="512" autocomplete="new-password" />
+          <p class="field-hint">Leere Zugangsdaten lassen gespeicherte Werte unverändert.</p>
+          <label for="paypal-mode">PayPal-Umgebung</label>
+          <select id="paypal-mode">
+            <option value="sandbox">Sandbox (Testzahlungen)</option>
+            <option value="live">Live (echte Zahlungen)</option>
+          </select>
+          <label for="paypal-webhook-id">PayPal Webhook-ID</label>
+          <input id="paypal-webhook-id" type="text" maxlength="128" autocomplete="off" />
+          <p class="field-hint">In der PayPal Developer App einen Webhook für <code>PAYMENT.CAPTURE.COMPLETED</code> mit der URL <code>https://xn--zyro-getrnke-ocb.de/api/paypal/webhook</code> anlegen und dessen ID hier eintragen.</p>
+          <label class="check-row" for="paypal-enabled">
+            <input id="paypal-enabled" type="checkbox" />
+            <span>PayPal im Shop aktivieren (erst nach erfolgreichem Sandbox-Test auf Live umstellen)</span>
+          </label>
+          <p id="paypal-status" class="field-hint">PayPal wird geladen …</p>
+          <div class="button-row">
+            <button id="paypal-button" class="button button-secondary" type="button">PayPal speichern &amp; Verbindung prüfen</button>
           </div>
 
           <div class="button-row">

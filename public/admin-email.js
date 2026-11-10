@@ -67,11 +67,22 @@ const showStripe = (stripe) => {
     : `Schlüssel gespeichert (${stripe.mode === 'live' ? 'Live' : 'Test'}). ${stripe.enabled ? 'Online-Zahlung im Shop ist AKTIV.' : 'Webhook-Geheimnis fehlt – Zahlung noch nicht aktiv.'}`
 }
 
+const showPaypal = (paypal) => {
+  const enabledInput = document.querySelector('#paypal-enabled')
+  const modeInput = document.querySelector('#paypal-mode')
+  enabledInput.checked = paypal?.enabled === true
+  modeInput.value = paypal?.mode === 'live' ? 'live' : 'sandbox'
+  document.querySelector('#paypal-status').textContent = !paypal?.configured
+    ? 'PayPal ist noch nicht eingerichtet.'
+    : `Zugangsdaten gespeichert (${paypal.mode === 'live' ? 'Live' : 'Sandbox'}). ${paypal.webhookConfigured ? 'Webhook eingerichtet.' : 'Webhook-ID fehlt.'} ${paypal.enabled ? 'PayPal ist im Shop aktiv.' : 'PayPal ist im Shop deaktiviert.'}`
+}
+
 const loadSettings = async () => {
   showStatus('Einstellungen werden geladen …')
   const result = await request('GET')
   showSettings(result.mail)
   showStripe(result.stripe)
+  showPaypal(result.paypal)
   showStatus('')
 }
 
@@ -84,6 +95,29 @@ document.querySelector('#stripe-button').addEventListener('click', async () => {
     webhookInput.value = ''
     showStripe(result.stripe)
     showStatus('Stripe wurde gespeichert.')
+  } catch (error) {
+    showStatus(error.message, true)
+  }
+})
+
+document.querySelector('#paypal-button').addEventListener('click', async () => {
+  const clientIdInput = document.querySelector('#paypal-client-id')
+  const clientSecretInput = document.querySelector('#paypal-client-secret')
+  const webhookIdInput = document.querySelector('#paypal-webhook-id')
+  try {
+    const result = await request('POST', {
+      action: 'savePaypal',
+      clientId: clientIdInput.value,
+      clientSecret: clientSecretInput.value,
+      webhookId: webhookIdInput.value,
+      mode: document.querySelector('#paypal-mode').value,
+      enabled: document.querySelector('#paypal-enabled').checked,
+    })
+    clientIdInput.value = ''
+    clientSecretInput.value = ''
+    webhookIdInput.value = ''
+    showPaypal(result.paypal)
+    showStatus('PayPal-Zugangsdaten wurden gespeichert und die API-Verbindung geprüft.')
   } catch (error) {
     showStatus(error.message, true)
   }

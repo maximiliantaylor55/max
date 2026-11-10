@@ -1,6 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { calculateFinanceReport, calculateVatSubmissionPreview } from './finance-accounting.js'
+import {
+  calculateFinanceReport,
+  calculateIssuedInvoiceOverview,
+  calculateVatSubmissionPreview,
+} from './finance-accounting.js'
 
 const entries = [
   { type: 'income', category: 'Warenverkauf', date: '2026-10-02', paidAt: '2026-10-03', grossCents: 11900, vatRate: 19 },
@@ -25,6 +29,55 @@ test('does not claim purchase input VAT without an invoice receipt', () => {
     { ...entries[1], receiptAvailable: false },
   ], '2026-10')
   assert.equal(report.inputVatCents, 0)
+})
+
+test('lists issued invoices for the selected month without counting drafts or cancelled invoices', () => {
+  const overview = calculateIssuedInvoiceOverview([
+    {
+      id: 'invoice-1',
+      kind: 'rechnung',
+      status: 'Versendet',
+      documentDate: '2026-10-12',
+      number: 'RE-2026-0001',
+      recipient: 'Getränkemarkt GmbH',
+      vatRate: 19,
+      items: [{ quantity: 2, unitPrice: 10 }],
+    },
+    {
+      id: 'invoice-2',
+      kind: 'rechnung',
+      status: 'Bezahlt',
+      documentDate: '2026-10-20',
+      vatRate: 7,
+      quantity: 1,
+      unitPrice: 50,
+    },
+    { id: 'draft', kind: 'rechnung', status: 'Entwurf', documentDate: '2026-10-10' },
+    { id: 'cancelled', kind: 'rechnung', status: 'Storniert', documentDate: '2026-10-11' },
+    { id: 'other-month', kind: 'rechnung', status: 'Versendet', documentDate: '2026-09-30' },
+  ], '2026-10')
+
+  assert.equal(overview.invoices.length, 2)
+  assert.equal(overview.invoices[0].grossCents, 2380)
+  assert.equal(overview.invoices[1].grossCents, 5350)
+  assert.equal(overview.netCents, 7000)
+  assert.equal(overview.grossCents, 7730)
+})
+
+test('keeps issued invoices visible when their stored amount data is invalid', () => {
+  const overview = calculateIssuedInvoiceOverview([{
+    id: 'invoice-invalid',
+    kind: 'rechnung',
+    status: 'Ausgestellt',
+    documentDate: '2026-10-12',
+    vatRate: 19,
+    items: [{ quantity: 0, unitPrice: 10 }],
+  }], '2026-10')
+
+  assert.equal(overview.invoices.length, 1)
+  assert.equal(overview.invoices[0].grossCents, null)
+  assert.equal(overview.invalidCount, 1)
+  assert.equal(overview.grossCents, 0)
 })
 
 test('builds a monthly VAT submission preview with tax bases and VAT totals', () => {

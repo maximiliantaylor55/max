@@ -9,12 +9,17 @@ import {
   encryptHrSensitiveData,
   normalizeSocialSecurityNumber,
 } from './hr-sensitive-data.js'
-import { calculateFinanceReport, calculateVatSubmissionPreview } from './finance-accounting.js'
+import {
+  calculateFinanceReport,
+  calculateIssuedInvoiceOverview,
+  calculateVatSubmissionPreview,
+} from './finance-accounting.js'
 import {
   buildDatevPreparationCsv,
   createPurchaseFinanceEntry,
   createSalesInvoiceFinanceEntry,
   getSkr03AccountSuggestion,
+  reconcilePaidSalesInvoices,
 } from './erp-accounting.js'
 import { calculateProductionCost } from './production-calculation.js'
 import {
@@ -33,6 +38,11 @@ import {
 } from './mailbox-archive.js'
 import Mailbox from './Mailbox.jsx'
 import SipSoftphone from './SipSoftphone.jsx'
+import CustomerLetters from './CustomerLetters.jsx'
+import PaywiseInkasso from './PaywiseInkasso.jsx'
+import PaywiseMahnservice from './PaywiseMahnservice.jsx'
+import Newsletter from './Newsletter.jsx'
+import BehoerdenMappe from './BehoerdenMappe.jsx'
 
 const companyDetails = {
   name: 'Liberty Street Food GmbH',
@@ -834,6 +844,8 @@ function App() {
   const [hrSvBusy, setHrSvBusy] = useState(false)
   const [uploadedDocuments, setUploadedDocuments] = useState(() => readStorage('zyro-archive-documents', []))
   const [customers, setCustomers] = useState(() => readStorage('zyro-customers', []))
+  const [customerLetters, setCustomerLetters] = useState(() => readStorage('zyro-customer-letters', []))
+  const [qmDocuments, setQmDocuments] = useState(() => readStorage('zyro-qm-documents', []))
   const [deleteRequests, setDeleteRequests] = useState(() => readStorage('zyro-delete-requests', []))
   const [auditEntries, setAuditEntries] = useState(() => readStorage('zyro-audit-log', []))
   const [auditSearch, setAuditSearch] = useState('')
@@ -1345,6 +1357,8 @@ function App() {
       'zyro-archive-documents': setUploadedDocuments,
       'zyro-orders': setOrders,
       'zyro-customers': setCustomers,
+      'zyro-customer-letters': setCustomerLetters,
+      'zyro-qm-documents': setQmDocuments,
       'zyro-products': setProducts,
       'zyro-recipes': setRecipes,
       'zyro-inventory': setInventory,
@@ -1561,6 +1575,14 @@ function App() {
   }, [customers, authSessionToken])
 
   useEffect(() => {
+    persistCollection('zyro-customer-letters', customerLetters, authSessionToken)
+  }, [customerLetters, authSessionToken])
+
+  useEffect(() => {
+    persistCollection('zyro-qm-documents', qmDocuments, authSessionToken)
+  }, [qmDocuments, authSessionToken])
+
+  useEffect(() => {
     persistCollection('zyro-inventory', inventory, authSessionToken)
   }, [inventory, authSessionToken])
 
@@ -1638,6 +1660,58 @@ function App() {
     return () => window.clearTimeout(notificationTimer)
   }, [deleteRequests, currentUser, networkInitialized, notificationSoundEnabled])
 
+  // Geschäftsereignisse (Shop-Bestellung, Zahlung, Kontaktanfrage, Widerruf, Paywise):
+  // jede Minute abfragen, in die Glocke legen und als Windows-/Browser-Benachrichtigung zeigen.
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== 'admin' || !window.zyroEvents?.list) return
+    const storageKey = `zyro-business-events-since-${currentUser.id}`
+    let active = true
+    let timer
+    if (window.Notification && Notification.permission === 'default') Notification.requestPermission().catch(() => {})
+    const targetTab = { order: 'shop', payment: 'zahlungen', contact: 'anfragen', withdrawal: 'anfragen', paywise: 'zahlungen', newsletter: 'newsletter' }
+    const poll = async () => {
+      try {
+        // Beim ersten Start die letzten 24 Stunden nachholen, danach nur Neues seit dem letzten Abruf.
+        const since = Number(window.localStorage.getItem(storageKey)) || Date.now() - 24 * 60 * 60 * 1000
+        const result = await window.zyroEvents.list(since, authSessionToken)
+        if (!active) return
+        const events = Array.isArray(result?.events) ? result.events : []
+        const newest = events.reduce((max, entry) => Math.max(max, Number(entry.at) || 0), since)
+        window.localStorage.setItem(storageKey, String(newest))
+        if (events.length) {
+          const incoming = events.map((entry) => ({
+            id: `event:${entry.id}`,
+            title: entry.title,
+            detail: entry.body,
+            createdAt: new Date(Number(entry.at) || Date.now()).toISOString(),
+            targetTab: targetTab[entry.type] || 'dashboard',
+            read: false,
+          }))
+          setNotificationItems((current) => {
+            const known = new Set(current.map((item) => item.id))
+            const fresh = incoming.filter((item) => !known.has(item.id))
+            if (!fresh.length) return current
+            if (window.Notification && Notification.permission === 'granted') {
+              fresh.slice(-5).forEach((item) => {
+                const notice = new Notification(item.title, { body: item.detail, tag: item.id, silent: !notificationSoundEnabled })
+                notice.onclick = () => { window.focus(); setActiveTab(item.targetTab) }
+              })
+            }
+            if (notificationSoundEnabled) playIncomingNotificationSound()
+            const updated = [...fresh.reverse(), ...current].slice(0, 50)
+            window.localStorage.setItem(`zyro-notifications-${currentUser.id}`, JSON.stringify(updated))
+            return updated
+          })
+        }
+      } catch (error) {
+        console.warn('Benachrichtigungen konnten nicht geladen werden:', error.message)
+      }
+      if (active) timer = window.setTimeout(poll, 60000)
+    }
+    poll()
+    return () => { active = false; window.clearTimeout(timer) }
+  }, [currentUser, authSessionToken, notificationSoundEnabled])
+
   useEffect(() => {
     if (!window.zyroData) return
     let isActive = true
@@ -1672,6 +1746,8 @@ function App() {
       'zyro-schedule-requests': setScheduleRequests,
       'zyro-website-orders': setWebsiteOrders,
       'zyro-customers': setCustomers,
+      'zyro-customer-letters': setCustomerLetters,
+      'zyro-qm-documents': setQmDocuments,
       'zyro-inventory': setInventory,
       'zyro-delete-requests': setDeleteRequests,
       'zyro-audit-log': setAuditEntries,
@@ -1705,6 +1781,8 @@ function App() {
       'zyro-archive-documents': [],
       'zyro-website-orders': [],
       'zyro-customers': [],
+      'zyro-customer-letters': [],
+      'zyro-qm-documents': [],
       'zyro-inventory': seedInventory,
       'zyro-delete-requests': [],
       'zyro-audit-log': [],
@@ -2009,7 +2087,7 @@ function App() {
       return permissions.includes(tab)
         || (tab === 'mde' && permissions.includes('lager'))
         || (tab === 'versand' && (permissions.includes('mde') || permissions.includes('lager')))
-    }).concat('zahlungen', 'dienstplan')
+    }).concat('zahlungen', ...(currentUser?.role === 'admin' ? ['newsletter'] : []), 'dienstplan')
   const tabs = scheduleStandalone
     ? availableTabs.filter((tab) => tab === 'dienstplan')
     : scannerStandalone
@@ -2502,6 +2580,16 @@ function App() {
     () => calculateFinanceReport(financeEntries, financeMonth),
     [financeEntries, financeMonth],
   )
+  const financeInvoiceOverview = useMemo(
+    () => calculateIssuedInvoiceOverview(salesDocuments, financeMonth),
+    [salesDocuments, financeMonth],
+  )
+  useEffect(() => {
+    if (!networkInitialized || !authSessionToken || !canManageFinance(currentUser)) return
+    const result = reconcilePaidSalesInvoices(salesDocuments, financeEntries, () => crypto.randomUUID())
+    if (result.entries !== financeEntries) setFinanceEntries(result.entries)
+    if (result.issues.length > 0) setFinanceMessage(result.issues.join(' '))
+  }, [salesDocuments, financeEntries, networkInitialized, authSessionToken, currentUser])
   const productionCalculationPreview = useMemo(() => {
     try {
       return calculateProductionCost(productionCalculationForm)
@@ -4619,6 +4707,25 @@ function App() {
       setOrders((current) => current.map((order) => String(order.id) === String(salesDocument.relatedOrderId)
         ? { ...order, workflowHistory: [...(order.workflowHistory || []), createWorkflowEvent('Belegstatus geändert', `${salesDocument.number}: ${salesDocument.status} → ${status}`)] }
         : order))
+    }
+    // Paywise-Mahnservice: Zahlung melden bzw. auf Stornierung hinweisen, damit keine Mahnung mehr rausgeht.
+    if (salesDocument.kind === 'rechnung' && currentUser?.role === 'admin' && window.zyroPaywise?.mahnserviceGet) {
+      if (status === 'Bezahlt' && window.zyroPaywise.mahnservicePayment) {
+        window.zyroPaywise.mahnservicePayment(salesDocument.id, authSessionToken)
+          .then((result) => {
+            if (result?.reported) setSalesFeedback(`Zahlung für ${salesDocument.number} (${result.amount} €) an den Paywise-Mahnservice gemeldet – der Mahnlauf stoppt.`)
+          })
+          .catch((error) => setSalesFeedback(`Zahlung für ${salesDocument.number} konnte nicht an Paywise gemeldet werden: ${error.message} Bitte im Paywise-Portal nachtragen.`))
+      }
+      if (status === 'Storniert') {
+        window.zyroPaywise.mahnserviceGet(salesDocument.id, authSessionToken)
+          .then((result) => {
+            if (result?.submitted && !['cancelled', 'paid', 'written_off'].includes(result.dunningState)) {
+              setSalesFeedback(`Achtung: Rechnung ${salesDocument.number} läuft noch im Paywise-Mahnservice. Bitte dort im Portal stornieren, sonst wird weiter gemahnt.`)
+            }
+          })
+          .catch(() => {})
+      }
     }
   }
 
@@ -7404,6 +7511,7 @@ function App() {
               {tab === 'finanzen' && 'Finanzen'}
               {tab === 'zahlungen' && 'Zahlungen'}
               {tab === 'kalkulation' && 'Kalkulation'}
+              {tab === 'newsletter' && 'Newsletter'}
               {tab === 'shop' && 'Shop'}
               {tab === 'lager' && 'Lager'}
               {tab === 'mde' && 'MDE · Scanner'}
@@ -7502,7 +7610,7 @@ function App() {
                   {notificationItems.length === 0 ? <p>Keine neuen Benachrichtigungen.</p> : (
                     <div className="notification-list">
                       {notificationItems.map((item) => (
-                        <button key={item.id} type="button" className="notification-item" onClick={() => { setActiveTab('tickets'); setNotificationsOpen(false) }}>
+                        <button key={item.id} type="button" className="notification-item" onClick={() => { setActiveTab(item.targetTab || 'tickets'); setNotificationsOpen(false) }}>
                           <strong>{item.title}</strong>
                           <span>{item.detail}</span>
                           <small>{formatTimestamp(item.createdAt)}</small>
@@ -7922,8 +8030,8 @@ function App() {
               </div>
               <p className="schedule-privacy-note">
                 {currentUser.role === 'admin'
-                  ? 'Mitarbeiter melden sich online unter /schichtplan mit ihren bestehenden Benutzerdaten an. Dort sehen sie ausschließlich ihre eigenen Schichten.'
-                  : 'Du siehst hier nur deine eigenen Schichten. Melde dich mit denselben Benutzerdaten wie in der Desktop-App an.'}
+                  ? 'Mitarbeiter melden sich online unter /schichtplan mit ihren bestehenden Benutzerdaten an. Unter „Antrag stellen“ können sie Urlaub, Abwesenheit und Schichttausch beantragen. Admins bearbeiten diese unter „Anträge bearbeiten“.'
+                  : 'Du siehst hier nur deine eigenen Schichten. Unter „Antrag stellen“ kannst du online Urlaub, Abwesenheit und Schichttausch beantragen.'}
               </p>
               <div className="schedule-week-grid">
                 {scheduleWeekDays.map((day) => {
@@ -8346,6 +8454,12 @@ function App() {
 
         {activeTab === 'kunden' && (
           <>
+          <CustomerLetters
+            customers={customerOptions}
+            companyDetails={invoiceCompanyDetails}
+            letters={customerLetters}
+            onLettersChange={setCustomerLetters}
+          />
           <Suspense fallback={<section className="panel customer-map-panel">Europa-Karte wird geladen …</section>}>
             <CustomerMap customers={customers} />
           </Suspense>
@@ -8931,6 +9045,41 @@ function App() {
                 <div><span>Vorsteuer laut Belegen</span><strong>{formatFinanceEuro(financeReport.inputVatCents)}</strong></div>
                 <div><span>UStVA-Vorschau · Zahllast / Erstattung</span><strong>{formatFinanceEuro(financeReport.vatDueCents)}</strong></div>
               </div>
+              <section className="elster-preview" aria-labelledby="issued-invoices-title">
+                <div className="panel-header">
+                  <div>
+                    <h3 id="issued-invoices-title">Ausgestellte Rechnungen im Monat</h3>
+                    <p className="meta">Nach Rechnungsdatum · separat von den zahlungsbasierten BWA-Summen</p>
+                  </div>
+                  <strong>{financeInvoiceOverview.invoices.length} · Netto {formatFinanceEuro(financeInvoiceOverview.netCents)} · Brutto {formatFinanceEuro(financeInvoiceOverview.grossCents)}</strong>
+                </div>
+                {financeInvoiceOverview.invalidCount > 0 && (
+                  <p className="finance-notice" role="status">
+                    Bei {financeInvoiceOverview.invalidCount} Rechnung(en) sind die Betragsdaten ungültig und müssen geprüft werden.
+                  </p>
+                )}
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead><tr><th>Rechnungsdatum</th><th>Rechnungsnummer</th><th>Kunde</th><th>Status</th><th>Netto</th><th>Brutto</th><th>BWA-Verknüpfung</th></tr></thead>
+                    <tbody>
+                      {financeInvoiceOverview.invoices.map((invoice) => (
+                        <tr key={invoice.id}>
+                          <td>{invoice.documentDate}</td>
+                          <td>{invoice.number || '–'}</td>
+                          <td>{invoice.recipient || '–'}</td>
+                          <td>{invoice.status}</td>
+                          <td>{invoice.netCents === null ? 'Prüfen' : formatFinanceEuro(invoice.netCents)}</td>
+                          <td>{invoice.grossCents === null ? 'Prüfen' : formatFinanceEuro(invoice.grossCents)}</td>
+                          <td>{financeEntries.some((entry) => String(entry.sourceDocumentId || '') === invoice.id) ? 'Automatisch verknüpft' : invoice.status === 'Bezahlt' ? 'Verknüpfung ausstehend' : 'Noch nicht bezahlt'}</td>
+                        </tr>
+                      ))}
+                      {financeInvoiceOverview.invoices.length === 0 && (
+                        <tr><td colSpan="7">Keine ausgestellten Rechnungen im ausgewählten Monat.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
               {showElsterPreview && currentUser?.role === 'admin' && (
                 <section className="elster-preview" aria-labelledby="elster-preview-title">
                   <div className="panel-header">
@@ -10377,6 +10526,15 @@ function App() {
                 {salesDocuments.map((salesDocument) => {
                   const netTotal = getSalesDocumentItems(salesDocument).reduce((sum, item) => sum + Number(item.quantity) * Number(item.unitPrice), 0)
                   const grossTotal = salesDocument.websiteInvoiceTotals ? Number(salesDocument.websiteInvoiceTotals.grossTotal) : netTotal * (1 + Number(salesDocument.vatRate) / 100)
+                  const invoiceItems = getSalesDocumentItems(salesDocument)
+                  const depositTotal = invoiceItems.reduce((sum, item) => {
+                    const product = products.find((entry) => String(entry.id) === String(item.productId))
+                      || products.find((entry) => item.productSku && entry.sku === item.productSku)
+                    return sum + Number(item.quantity || 0) * Number(product?.depositPerUnit || 0)
+                  }, 0)
+                  const payableTotal = grossTotal + depositTotal
+                  const paywiseCustomer = customers.find((entry) => String(entry.id) === String(salesDocument.customerId))
+                    || customers.find((entry) => entry.name?.toLocaleLowerCase() === String(salesDocument.recipient || '').toLocaleLowerCase())
                   const followupDocument = salesDocuments.find((entry) => entry.id === salesDocument.convertedToId)
                   return (
                     <article key={salesDocument.id} className="mini-card">
@@ -10415,6 +10573,14 @@ function App() {
                         {salesDocument.kind === 'kundenauftrag' && (
                           <button type="button" className="secondary-button small" onClick={() => printPickingList(salesDocument)}>Kommissionierliste</button>
                         )}
+                        {salesDocument.kind === 'rechnung' && salesDocument.status === 'Überfällig'
+                          && currentUser?.role === 'admin'
+                          && window.zyroPaywise?.submit
+                          && <PaywiseInkasso invoice={{ ...salesDocument, items: invoiceItems }} customer={paywiseCustomer} amount={payableTotal} sessionToken={authSessionToken} />}
+                        {salesDocument.kind === 'rechnung' && ['Ausgestellt', 'Versendet', 'Überfällig'].includes(salesDocument.status)
+                          && currentUser?.role === 'admin'
+                          && window.zyroPaywise?.mahnserviceSubmit
+                          && <PaywiseMahnservice invoice={salesDocument} customer={paywiseCustomer} amount={payableTotal} sessionToken={authSessionToken} />}
                         {salesDocument.status !== 'Storniert' && (
                           <button
                             type="button"
@@ -11504,6 +11670,16 @@ function App() {
         )}
 
         {activeTab === 'dokumente' && (
+          <BehoerdenMappe
+            companyDetails={invoiceCompanyDetails}
+            bottlerDetails={bottlerDetails}
+            records={qmDocuments}
+            onRecordsChange={setQmDocuments}
+            currentUser={currentUser}
+          />
+        )}
+
+        {activeTab === 'dokumente' && (
           <section className="panel">
             <div className="panel-header">
               <div>
@@ -11878,6 +12054,9 @@ function App() {
           {currentUser.role === 'admin' && <Mailbox sessionToken={authSessionToken} userName={currentUser.name} onUnreadCountChange={setMailboxUnreadCount} onSaveAttachments={archiveMailboxAttachments} />}
         </div>
 
+        {activeTab === 'newsletter' && currentUser.role === 'admin' && window.zyroNewsletter && (
+          <Newsletter sessionToken={authSessionToken} defaultTestEmail={currentUser.email || ''} />
+        )}
         {activeTab === 'anfragen' && currentUser.role === 'admin' && (
           <section className="inquiries-page">
             <div className="panel">

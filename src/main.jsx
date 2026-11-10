@@ -14,7 +14,7 @@ class AppErrorBoundary extends Component {
   render() {
     if (!this.state.error) return this.props.children
     return (
-      <div style={{ padding: 20, color: '#f8fafc', background: '#0f172a', minHeight: '100vh', font: '16px Arial, sans-serif' }}>
+      <div style={{ padding: 20, color: '#241910', background: '#f5f0e8', minHeight: '100vh', font: '16px Arial, sans-serif' }}>
         <h2>Ein Fehler ist aufgetreten</h2>
         <p style={{ overflowWrap: 'anywhere' }}>{String(this.state.error?.stack || this.state.error?.message || this.state.error).slice(0, 800)}</p>
         <button type="button" style={{ padding: '12px 18px', fontSize: 16 }} onClick={() => window.location.reload()}>Neu laden</button>

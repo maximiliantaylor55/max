@@ -17,6 +17,8 @@ const dataKeys = [
   'zyro-bottler-details',
   'zyro-website-orders',
   'zyro-customers',
+  'zyro-customer-letters',
+  'zyro-qm-documents',
   'zyro-sales-target',
   'zyro-inventory',
   'zyro-stock-movements',
@@ -35,8 +37,14 @@ const dataKeys = [
 const sessionStateKey = 'zyro-web-current-user'
 const sessionTokenKey = 'zyro-web-session-token'
 const archiveDocumentsKey = 'zyro-archive-documents'
-const cloudPollIntervalMs = 10 * 1000
+// Firebase-Kosten: Datenabgleich nur bei sichtbarem Fenster, Telefon-Abfrage mit Pause.
+const cloudPollIntervalMs = 20 * 1000
 const callPollIntervalMs = 1500
+const callPollIdleVisibleMs = 3000
+const callPollIdleHiddenMs = 8000
+const callPollActiveMs = 400
+const isPageHidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden'
+const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms))
 let localRevision = Date.now()
 let lastSyncAt = 0
 let syncInProgress = false
@@ -434,6 +442,7 @@ const syncAfterAuthentication = async () => {
 
 if (typeof window !== 'undefined') {
   window.setInterval(() => {
+    if (isPageHidden()) return
     syncCloudData().catch((error) => emit('zyro-data-sync-error', { message: error.message }))
   }, cloudPollIntervalMs)
   window.addEventListener('online', syncWhenAvailable)
@@ -454,7 +463,18 @@ if (typeof window !== 'undefined') {
           const result = await callRequest('poll')
           if (callConnection !== connection || !connection.active) return
           emitCallMessage({ type: 'call:users', users: result.users || [] })
-          for (const message of result.messages || []) emitCallMessage(message)
+          const messages = result.messages || []
+          for (const message of messages) {
+            const type = String(message?.type || '')
+            if (['call:incoming', 'call:ringing', 'call:accepted', 'call:signal'].includes(type)) connection.inCall = true
+            if (['call:ended', 'call:rejected', 'call:unavailable'].includes(type)) connection.inCall = false
+            emitCallMessage(message)
+          }
+          // Vorher lief diese Schleife ohne Pause (mehrere Abfragen pro Sekunde).
+          // Während eines Verbindungsaufbaus kurz nachfragen, sonst ruhen.
+          await wait(messages.length > 0 || connection.inCall
+            ? callPollActiveMs
+            : isPageHidden() ? callPollIdleHiddenMs : callPollIdleVisibleMs)
         } catch (error) {
           if (callConnection !== connection || !connection.active) return
           emitCallError(error.message)
@@ -487,6 +507,7 @@ if (typeof window !== 'undefined') {
         }
       },
       send: (message) => {
+        if (callConnection) callConnection.inCall = !['call:end', 'call:reject'].includes(String(message?.type || ''))
         callRequest('send', { message }).then((result) => {
           if (result.message) emitCallMessage(result.message)
         }).catch((error) => emitCallError(error.message))
@@ -824,5 +845,25 @@ if (typeof window !== 'undefined' && !window.zyroAuth) {
       return { receipt: result.receipt, data: Uint8Array.from(atob(result.data), (character) => character.charCodeAt(0)) }
     },
     delete: (entryId, receiptId) => financeReceiptRequest('delete', { entryId, receiptId }),
+  }
+  const paywiseRequest = (action, payload = {}) => requestJson('/api/management/paywise', {
+    method: 'POST',
+    body: JSON.stringify({ action, ...payload }),
+  })
+  window.zyroNewsletter = {
+    request: (action, payload) => requestJson('/api/management/newsletter', {
+      method: 'POST',
+      body: JSON.stringify({ action, payload: payload || {} }),
+    }),
+  }
+  window.zyroEvents = {
+    list: (since) => requestJson(`/api/management/events?since=${encodeURIComponent(Number(since) || 0)}`),
+  }
+  window.zyroPaywise = {
+    status: () => paywiseRequest('status'),
+    submit: (submission) => paywiseRequest('submit', submission),
+    mahnserviceGet: (invoiceId) => paywiseRequest('mahnservice-get', { invoiceId }),
+    mahnserviceSubmit: (submission) => paywiseRequest('mahnservice-submit', submission),
+    mahnservicePayment: (invoiceId) => paywiseRequest('mahnservice-payment', { invoiceId }),
   }
 }

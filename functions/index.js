@@ -20,6 +20,11 @@ const {
 const { addLot, allocateFefo, normalizeLotInput } = require('./lots.cjs')
 const { buildInvoicePdf, createInvoiceFromOrder } = require('./auto-invoice.cjs')
 const { buildCheckoutParams, getCheckoutAmountCents, verifyStripeSignature } = require('./stripe-helpers.cjs')
+const {
+  buildPaypalOrderRequest,
+  getPaypalApiBaseUrl,
+  validateCompletedPaypalOrder,
+} = require('./paypal-helpers.cjs')
 const { hashReviewToken, getReviewPersistenceState, isDhlDelivered, getReviewProducts, validateReviewSubmission } = require('./review-workflow.cjs')
 const { validateContactMessage } = require('./contact-validation.cjs')
 const { validateFinanceEntries } = require('./finance-validation.cjs')
@@ -40,6 +45,23 @@ const { validateCompanyDetailsEntries, defaultCompanyDetails } = require('./comp
 const { validateBottlerDetailsEntries } = require('./bottler-details.cjs')
 const { validateSalesDocumentEmail } = require('./sales-document-email.cjs')
 const { isAllowedInvoiceStatusChange, haveSameInvoiceFields } = require('./invoice-status.cjs')
+const {
+  buildMahnserviceDebtorPayload,
+  buildMahnserviceInvoicePayload,
+  mahnserviceDunningStateLabels,
+  MAHNSERVICE_BASE,
+  normalizeMahnserviceDebtor,
+  uploadPaywisePdf,
+  buildPaywiseDebtorPayload,
+  buildPaywiseInvoiceDocumentPayload,
+  buildPaywiseOrderPayload,
+  calculateInvoicePayableTotal,
+  callPaywiseApi,
+  normalizePaywiseSubmission,
+  verifyPaywiseWebhookSignature,
+  collectPaywiseIds,
+  waitForPaywiseDocument,
+} = require('./paywise.cjs')
 const {
   createScheduleRequest,
   filterScheduleRequestsForEmployee,
@@ -71,6 +93,8 @@ admin.initializeApp()
 const db = admin.firestore()
 const region = 'europe-west3'
 const orderAdminToken = defineSecret('ZYRO_ORDER_ADMIN_TOKEN')
+const paywiseApiKey = defineSecret('PAYWISE_API_KEY')
+const paywiseWebhookSecret = defineSecret('PAYWISE_WEBHOOK_SECRET')
 const allowedOrigins = new Set([
   'https://zyro-78855.web.app',
   'https://xn--zyro-getrnke-ocb.de',
@@ -400,13 +424,148 @@ const getStripeStatus = async () => {
   return { configured: Boolean(data?.secret), webhookConfigured: Boolean(data?.webhook), enabled: data?.enabled === true, mode: data?.mode || '' }
 }
 
-const sendShopEmail = async ({ to, subject, text, html, attachment, replyTo }) => {
+const paypalConfigRef = db.collection('privateShop').doc('paypal')
+
+const getPaypalConfig = async () => {
+  const snapshot = await paypalConfigRef.get()
+  const data = snapshot.exists ? snapshot.data() : null
+  if (!data?.clientId || !data?.secret) return null
+  return {
+    clientId: decryptMailPassword(data.clientId),
+    clientSecret: decryptMailPassword(data.secret),
+    webhookId: String(data.webhookId || ''),
+    mode: data.mode === 'live' ? 'live' : 'sandbox',
+    enabled: data.enabled === true,
+  }
+}
+
+const getPaypalStatus = async () => {
+  const data = (await paypalConfigRef.get()).data()
+  return {
+    configured: Boolean(data?.clientId && data?.secret),
+    webhookConfigured: Boolean(data?.webhookId),
+    enabled: data?.enabled === true,
+    mode: data?.mode === 'live' ? 'live' : 'sandbox',
+  }
+}
+
+const hasPaypalInvalidWhitespace = (value) => [...value].some((character) => {
+  const code = character.charCodeAt(0)
+  return code <= 0x20 || code === 0x7f
+})
+
+const getPaypalAccessToken = async (paypal) => {
+  const apiBase = getPaypalApiBaseUrl(paypal.mode)
+  const tokenResponse = await fetch(`${apiBase}/v1/oauth2/token`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${paypal.clientId}:${paypal.clientSecret}`).toString('base64')}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: 'grant_type=client_credentials',
+    signal: AbortSignal.timeout(15000),
+  })
+  const tokenData = await tokenResponse.json().catch(() => ({}))
+  if (!tokenResponse.ok || !tokenData.access_token) {
+    throw new Error(`PayPal-Authentifizierung fehlgeschlagen: ${String(tokenData.error_description || tokenData.error || 'Zugangsdaten prüfen.').slice(0, 180)}`)
+  }
+  return tokenData.access_token
+}
+
+const requestPaypalApi = async (paypal, path, { method = 'GET', body, requestId } = {}) => {
+  const apiBase = getPaypalApiBaseUrl(paypal.mode)
+  const accessToken = await getPaypalAccessToken(paypal)
+  const headers = { Authorization: `Bearer ${accessToken}` }
+  if (body !== undefined) headers['Content-Type'] = 'application/json'
+  if (requestId) headers['PayPal-Request-Id'] = requestId
+  const response = await fetch(`${apiBase}${path}`, {
+    method,
+    headers,
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    signal: AbortSignal.timeout(20000),
+  })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    const detail = data?.details?.[0]?.description || data?.message || data?.name || 'PayPal-Anfrage fehlgeschlagen.'
+    const error = new Error(String(detail).slice(0, 240))
+    error.status = response.status
+    throw error
+  }
+  return data
+}
+
+const savePaypalConfig = async ({ clientId, clientSecret, webhookId, mode, enabled }) => {
+  const existing = (await paypalConfigRef.get()).data() || {}
+  const nextClientId = String(clientId || '').trim()
+  const nextClientSecret = String(clientSecret || '').trim()
+  const nextWebhookId = String(webhookId || '').trim()
+  const selectedMode = mode === 'live' ? 'live' : mode === 'sandbox' ? 'sandbox' : ''
+  if (nextClientId && (nextClientId.length > 255 || hasPaypalInvalidWhitespace(nextClientId))) {
+    throw new Error('PayPal Client-ID ungültig.')
+  }
+  if (nextClientSecret && (nextClientSecret.length < 10 || nextClientSecret.length > 512 || /\s/.test(nextClientSecret))) {
+    throw new Error('PayPal Secret ungültig.')
+  }
+  if (nextWebhookId && (nextWebhookId.length > 128 || hasPaypalInvalidWhitespace(nextWebhookId))) {
+    throw new Error('PayPal Webhook-ID ungültig.')
+  }
+  if (!selectedMode) throw new Error('Bitte Sandbox oder Live auswählen.')
+  const encryptedClientId = nextClientId ? encryptMailPassword(nextClientId) : existing.clientId
+  const encryptedSecret = nextClientSecret ? encryptMailPassword(nextClientSecret) : existing.secret
+  if (!encryptedClientId || !encryptedSecret) throw new Error('Bitte PayPal Client-ID und Secret eintragen.')
+  const isEnabled = enabled === true
+  const existingClientId = existing.clientId ? decryptMailPassword(existing.clientId) : ''
+  const credentialsChanged = (nextClientId && nextClientId !== existingClientId)
+    || (nextClientSecret && existing.secret && nextClientSecret !== decryptMailPassword(existing.secret))
+  const modeChanged = existing.mode && existing.mode !== selectedMode
+  const resolvedWebhookId = nextWebhookId || (credentialsChanged || modeChanged ? '' : String(existing.webhookId || ''))
+  if (isEnabled && !resolvedWebhookId) throw new Error('Bitte zuerst die PayPal-Webhook-ID für PAYMENT.CAPTURE.COMPLETED eintragen.')
+  const config = {
+    clientId: nextClientId || decryptMailPassword(existing.clientId),
+    clientSecret: nextClientSecret || decryptMailPassword(existing.secret),
+    mode: selectedMode,
+  }
+  await getPaypalAccessToken(config)
+  await paypalConfigRef.set({
+    clientId: encryptedClientId,
+    secret: encryptedSecret,
+    webhookId: resolvedWebhookId,
+    mode: selectedMode,
+    enabled: isEnabled,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  })
+  return getPaypalStatus()
+}
+
+// Kunden-E-Mails kommen von noreply@zyro-getränke.de – Antworten sind nicht vorgesehen.
+// Die Adresse muss beim E-Mail-Anbieter als Alias/Absender des SMTP-Kontos erlaubt sein;
+// lehnt der Server sie ab, wird automatisch mit der normalen Absenderadresse verschickt.
+const NOREPLY_ADDRESS = 'noreply@xn--zyro-getrnke-ocb.de'
+const NOREPLY_TEXT = 'Dies ist eine automatisch versendete E-Mail. Bitte antworte nicht darauf – Antworten an diese Adresse werden nicht gelesen. Fragen? Schreib uns an info@zyro-getränke.de oder über das Kontaktformular auf zyro-getränke.de.'
+const appendNoReplyNotice = (text, html) => ({
+  text: text ? `${text}\n\n—\n${NOREPLY_TEXT}` : text,
+  html: html ? (() => {
+    const notice = `<p style="margin:28px 0 0;padding-top:14px;border-top:1px solid #e6ded3;font-size:12px;line-height:1.5;color:#8a7d70">${NOREPLY_TEXT.replace('info@zyro-getränke.de', '<a href="mailto:info@xn--zyro-getrnke-ocb.de" style="color:#8a7d70">info@zyro-getränke.de</a>')}</p>`
+    if (html.includes('</main>')) return html.replace(/<\/main>(?![\s\S]*<\/main>)/, `${notice}</main>`)
+    if (html.includes('</body>')) return html.replace(/<\/body>(?![\s\S]*<\/body>)/, `${notice}</body>`)
+    return `${html}${notice}`
+  })() : html,
+})
+const isSenderRejected = (error) => [501, 550, 551, 553, 554].includes(Number(error?.responseCode))
+  && /sender|from|envelope|not owned|not allowed|not permitted|relay|authoriz|alias/i.test(String(error?.response || error?.message || ''))
+
+const sendShopEmail = async ({ to, subject, text, html, attachment, replyTo, headers: extraHeaders = null, noReplyNotice = true }) => {
   const snapshot = await mailConfigRef.get()
   if (!snapshot.exists || !snapshot.data().passwordCiphertext) throw new Error('SMTP-Mailversand ist noch nicht eingerichtet.')
   const mail = snapshot.data()
   const port = Number(mail.port)
   const recipient = normalizeEmailAddress(to)
-  const normalizedReplyTo = replyTo ? normalizeEmailAddress(replyTo) : ''
+  // Interne Benachrichtigungen an das eigene Postfach bleiben beantwortbar (Antwort geht an den Kunden).
+  const canonical = (value) => { try { return String(canonicalEmailAddress(value) || '').toLowerCase() } catch { return String(value || '').trim().toLowerCase() } }
+  const teamAddress = canonical(await getInquiryNotifyEmail().catch(() => ''))
+  const noReply = !teamAddress || canonical(recipient) !== teamAddress
+  if (noReply && noReplyNotice) ({ text, html } = appendNoReplyNotice(text, html))
+  const normalizedReplyTo = noReply ? NOREPLY_ADDRESS : (replyTo ? normalizeEmailAddress(replyTo) : '')
   const transporter = nodemailer.createTransport({
     host: mail.host,
     port,
@@ -416,17 +575,30 @@ const sendShopEmail = async ({ to, subject, text, html, attachment, replyTo }) =
     greetingTimeout: 10000,
     socketTimeout: 20000,
   })
-  const info = await sendWithTransientRetry(
+  const send = (from) => sendWithTransientRetry(
     () => transporter.sendMail({
-      from: normalizeEmailAddress(mail.from),
+      from,
       to: recipient,
       subject,
       text,
       html,
       ...(normalizedReplyTo ? { replyTo: normalizedReplyTo } : {}),
+      ...((noReply || extraHeaders) ? { headers: { ...(noReply ? { 'Auto-Submitted': 'auto-generated', 'X-Auto-Response-Suppress': 'All' } : {}), ...(extraHeaders || {}) } } : {}),
       ...(attachment ? { attachments: [attachment] } : {}),
     }),
   )
+  let info
+  if (noReply) {
+    try {
+      info = await send({ name: 'ZYRO', address: NOREPLY_ADDRESS })
+    } catch (error) {
+      if (!isSenderRejected(error)) throw error
+      console.warn('SMTP lehnt noreply-Absender ab – Versand mit normaler Absenderadresse.', { code: error.responseCode })
+      info = await send(normalizeEmailAddress(mail.from))
+    }
+  } else {
+    info = await send(normalizeEmailAddress(mail.from))
+  }
   ensureRecipientsAccepted(info, [recipient])
   console.info('SMTP hat die Nachricht angenommen.', { messageId: String(info.messageId || ''), acceptedCount: info.accepted.length })
   return info
@@ -515,7 +687,9 @@ const syncOrderToDesktop = async (orderId, order, paymentStatus) => {
         description: items.map((item) => `${item.description} × ${item.quantity}`).join('\n'),
         quantity: first.quantity,
         unitPrice: first.unitPrice,
-        paymentMethod: order.paymentMethod === 'stripe' ? 'Online (Stripe)' : 'Vorkasse',
+        paymentMethod: order.paymentMethod === 'stripe'
+          ? 'Online (Stripe)'
+          : order.paymentMethod === 'paypal' ? 'PayPal' : 'Vorkasse',
         paymentStatus: paid ? 'paid' : 'pending',
         hasPreorderItems: order.hasPreorderItems === true,
         shippingMethod: 'DPD Paket (bis 31,5 kg)',
@@ -1404,6 +1578,484 @@ exports.sendBrandContactMessage = onRequest({
   }
 })
 
+// ---------------------------------------------------------------------------
+// Elektronische Widerrufsfunktion (§ 356a BGB): „Vertrag widerrufen“ → „Widerruf bestätigen“
+// → sofortige Eingangsbestätigung per E-Mail mit Inhalt, Datum und Uhrzeit.
+// ---------------------------------------------------------------------------
+const withdrawalsRef = db.collection('withdrawals')
+
+const validateWithdrawal = (body = {}) => {
+  const clean = (value, max) => String(value || '').replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, max)
+  const name = clean(body.name, 100)
+  const email = clean(body.email, 254).toLowerCase()
+  const order = clean(body.order, 200)
+  const items = String(body.items || '').replace(/[\u0000-\u0008\u000b-\u001f\u007f]+/g, ' ').trim().slice(0, 1000)
+  if (!name) throw new Error('Bitte deinen Namen angeben.')
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Bitte eine gültige E-Mail-Adresse angeben.')
+  if (!order) throw new Error('Bitte die Bestellnummer oder das Bestelldatum angeben.')
+  return { name, email, order, items }
+}
+
+const withdrawalText = ({ name, order, items }) => [
+  `Hiermit widerrufe ich den von mir abgeschlossenen Vertrag über den Kauf der folgenden Waren:`,
+  items ? items : 'gesamte Bestellung',
+  `Bestellung: ${order}`,
+  `Name: ${name}`,
+].join('\n')
+
+exports.submitWithdrawal = onRequest({
+  region,
+  cors: false,
+  maxInstances: 5,
+  timeoutSeconds: 30,
+  secrets: [orderAdminToken],
+}, async (request, response) => {
+  setCors(request, response)
+  if (request.method === 'OPTIONS') return response.status(204).send('')
+  if (request.method !== 'POST') return sendMethodError(response)
+  const origin = String(request.get('origin') || '')
+  if (origin && !allowedOrigins.has(origin)) return response.status(403).json({ error: 'Widerruf nicht zulässig.' })
+  if (String(request.body?.website || '').trim()) return response.status(202).json({ accepted: true })
+
+  let withdrawal
+  try {
+    withdrawal = validateWithdrawal(request.body)
+  } catch (error) {
+    return response.status(400).json({ error: error.message })
+  }
+  try {
+    await enforceContactRateLimit(request)
+  } catch (error) {
+    return response.status(429).json({ error: error.message })
+  }
+
+  const receivedAt = admin.firestore.Timestamp.now()
+  const receivedLabel = new Intl.DateTimeFormat('de-DE', {
+    timeZone: 'Europe/Berlin', dateStyle: 'long', timeStyle: 'medium',
+  }).format(receivedAt.toDate())
+  const declaration = withdrawalText(withdrawal)
+  const ref = withdrawalsRef.doc()
+  try {
+    await ref.set({ ...withdrawal, declaration, receivedAt, status: 'new' })
+  } catch (error) {
+    console.error('Widerruf konnte nicht gespeichert werden:', error.message)
+    return response.status(503).json({ error: 'Der Widerruf konnte gerade nicht gespeichert werden. Bitte versuche es erneut oder schreibe an info@zyro-getränke.de.' })
+  }
+
+  const reference = ref.id.slice(0, 8).toUpperCase()
+  const text = [
+    `Hallo ${withdrawal.name},`,
+    '',
+    'wir haben deinen Widerruf erhalten.',
+    '',
+    `Eingang: ${receivedLabel} Uhr`,
+    `Vorgangsnummer: W-${reference}`,
+    '',
+    'Inhalt deiner Widerrufserklärung:',
+    declaration,
+    '',
+    'Bitte sende die Ware innerhalb von 14 Tagen an: Liberty Street Food GmbH, Birlenbacherstr. 59, 57078 Siegen.',
+    'Die Erstattung erfolgt nach den Regeln unserer Widerrufsbelehrung: https://zyro-getränke.de/widerruf.html',
+    '',
+    'Viele Grüße',
+    'ZYRO · Liberty Street Food GmbH',
+  ].join('\n')
+  const html = `<p>Hallo ${escapeHtml(withdrawal.name)},</p><p>wir haben deinen Widerruf erhalten.</p>`
+    + `<p><strong>Eingang:</strong> ${escapeHtml(receivedLabel)} Uhr<br /><strong>Vorgangsnummer:</strong> W-${reference}</p>`
+    + `<p><strong>Inhalt deiner Widerrufserklärung:</strong></p><pre style="white-space:pre-wrap;font-family:inherit">${escapeHtml(declaration)}</pre>`
+    + '<p>Bitte sende die Ware innerhalb von 14 Tagen an: Liberty Street Food GmbH, Birlenbacherstr. 59, 57078 Siegen.</p>'
+    + '<p>Die Erstattung erfolgt nach den Regeln unserer <a href="https://zyro-getränke.de/widerruf.html">Widerrufsbelehrung</a>.</p><p>Viele Grüße<br />ZYRO · Liberty Street Food GmbH</p>'
+
+  let confirmationEmailSent = false
+  try {
+    await sendShopEmail({ to: withdrawal.email, replyTo: await getInquiryNotifyEmail(), subject: `Eingangsbestätigung deines Widerrufs (W-${reference})`, text, html })
+    confirmationEmailSent = true
+  } catch (error) {
+    console.error('Widerrufsbestätigung konnte nicht gesendet werden:', error.message)
+  }
+  try {
+    await sendShopEmail({
+      to: await getInquiryNotifyEmail(),
+      replyTo: withdrawal.email,
+      subject: `Neuer Widerruf W-${reference}: ${withdrawal.order}`.slice(0, 180),
+      text: `Neuer Widerruf eingegangen am ${receivedLabel} Uhr.\n\nE-Mail: ${withdrawal.email}\n\n${declaration}`,
+    })
+  } catch (error) {
+    console.error('Team-Benachrichtigung zum Widerruf fehlgeschlagen:', error.message)
+  }
+  await ref.update({ confirmationEmailStatus: confirmationEmailSent ? 'sent' : 'failed' }).catch(() => {})
+  return response.json({ received: true, reference: `W-${reference}`, receivedAt: receivedLabel, declaration, confirmationEmailSent })
+})
+
+// ---------------------------------------------------------------------------
+// Geschäftsereignisse für Desktop-/Browser-Benachrichtigungen:
+// neue Shop-Bestellung, Zahlung eingegangen, Kontaktanfrage, Widerruf, Paywise-Ereignis.
+// ---------------------------------------------------------------------------
+const paywiseEventLabels = {
+  'claim.status_changed': 'Forderungsstatus geändert',
+  'claim.payment_received': 'Zahlung über Paywise eingegangen',
+  'order.submitted': 'Auftrag eingereicht',
+  'invoice.paid': 'Mahnservice: Rechnung bezahlt',
+  'invoice.cancelled': 'Mahnservice: Rechnung storniert',
+  'invoice.reopened': 'Mahnservice: Rechnung wieder offen',
+  'dunning.level_advanced': 'Mahnservice: nächste Mahnstufe verschickt',
+  'dunning.handed_to_collection': 'Mahnservice: an Inkasso übergeben',
+}
+
+exports.businessEvents = onRequest({
+  region,
+  invoker: 'public',
+  cors: false,
+  maxInstances: 3,
+  timeoutSeconds: 20,
+  secrets: [orderAdminToken],
+}, async (request, response) => {
+  setCors(request, response)
+  if (request.method === 'OPTIONS') return response.status(204).send('')
+  if (!['GET', 'POST'].includes(request.method)) return sendMethodError(response)
+  const origin = String(request.get('origin') || '')
+  if (origin && !allowedOrigins.has(origin)) return response.status(403).json({ error: 'Zugriff nicht zulässig.' })
+  try {
+    const actor = verifyAdminToken(request) ? { role: 'admin' } : await getWebAppActor(request)
+    if (actor.role !== 'admin') return response.status(403).json({ error: 'Benachrichtigungen sind nur für Admins.' })
+  } catch (error) {
+    return response.status(401).json({ error: 'Bitte anmelden.' })
+  }
+
+  const now = Date.now()
+  const requested = Number(request.query?.since || request.body?.since || 0)
+  // Höchstens 3 Tage zurück, damit beim ersten Start keine alte Flut kommt.
+  const since = admin.firestore.Timestamp.fromMillis(Math.max(requested || now - 10 * 60 * 1000, now - 3 * 24 * 60 * 60 * 1000))
+  const euro = (cents) => `${(Number(cents || 0) / 100).toFixed(2).replace('.', ',')} €`
+  const query = (collection, field) => db.collection(collection).where(field, '>', since).orderBy(field, 'asc').limit(25).get()
+    .catch((error) => { console.error(`Ereignisse aus ${collection} nicht lesbar:`, error.message); return { docs: [] } })
+
+  const [orders, paid, contacts, withdrawals, paywise, newsletter] = await Promise.all([
+    query('publicOrders', 'createdAt'),
+    query('publicOrders', 'paidAt'),
+    query('brandContactMessages', 'createdAt'),
+    query('withdrawals', 'receivedAt'),
+    query('paywiseWebhookEvents', 'receivedAt'),
+    query('newsletterSubscribers', 'confirmedAt'),
+  ])
+  const events = []
+  orders.docs.forEach((doc) => {
+    const o = doc.data()
+    events.push({ id: `order:${doc.id}`, type: 'order', at: o.createdAt?.toMillis?.() || now,
+      title: 'Neue Shop-Bestellung', body: `${o.orderNumber || doc.id} · ${o.name || o.company || 'Kunde'} · ${euro(o.totalPriceCents)}` })
+  })
+  paid.docs.forEach((doc) => {
+    const o = doc.data()
+    events.push({ id: `paid:${doc.id}`, type: 'payment', at: o.paidAt?.toMillis?.() || now,
+      title: 'Zahlung eingegangen', body: `${o.orderNumber || doc.id} · ${euro(o.totalPriceCents)} · ${o.paymentMethod === 'paypal' ? 'PayPal' : o.paymentMethod === 'stripe' ? 'Online-Zahlung' : 'Überweisung'}` })
+  })
+  contacts.docs.forEach((doc) => {
+    const c = doc.data()
+    events.push({ id: `contact:${doc.id}`, type: 'contact', at: c.createdAt?.toMillis?.() || now,
+      title: 'Neue Kontaktanfrage', body: `${c.name || ''}: ${String(c.subject || '').slice(0, 80)}` })
+  })
+  withdrawals.docs.forEach((doc) => {
+    const w = doc.data()
+    events.push({ id: `withdrawal:${doc.id}`, type: 'withdrawal', at: w.receivedAt?.toMillis?.() || now,
+      title: 'Neuer Widerruf', body: `${w.name || ''} · ${String(w.order || '').slice(0, 80)}` })
+  })
+  paywise.docs.forEach((doc) => {
+    const p = doc.data()
+    events.push({ id: `paywise:${doc.id}`, type: 'paywise', at: p.receivedAt?.toMillis?.() || now,
+      title: 'Paywise', body: paywiseEventLabels[p.event] || `Ereignis: ${p.event || 'unbekannt'}` })
+  })
+  newsletter.docs.forEach((doc) => {
+    const n = doc.data()
+    events.push({ id: `newsletter:${doc.id}`, type: 'newsletter', at: n.confirmedAt?.toMillis?.() || now,
+      title: 'Neue Newsletter-Anmeldung', body: `${n.name ? `${n.name} · ` : ''}${n.email || ''}` })
+  })
+  events.sort((a, b) => a.at - b.at)
+  return response.json({ events: events.slice(-50), serverTime: now })
+})
+
+// ---------------------------------------------------------------------------
+// ZYRO-Newsletter: Anmeldung mit Double-Opt-in, Abmeldung, Bilder, Versand in Paketen.
+// ---------------------------------------------------------------------------
+const { renderNewsletterHtml, renderNewsletterText } = require('./newsletter-render.cjs')
+const newsletterSubscribersRef = db.collection('newsletterSubscribers')
+const newsletterCampaignsRef = db.collection('newsletterCampaigns')
+const newsletterImagesRef = db.collection('newsletterImages')
+const NEWSLETTER_BASE = 'https://xn--zyro-getrnke-ocb.de'
+const NEWSLETTER_CONSENT_TEXT = 'Ich möchte den ZYRO-Newsletter mit Neuigkeiten, Sorten und Angeboten per E-Mail erhalten. Abmeldung jederzeit über den Link in jeder E-Mail.'
+const newsletterKey = (email) => crypto.createHash('sha256').update(String(email || '').trim().toLowerCase()).digest('hex')
+const newsletterTokenHash = (token) => crypto.createHash('sha256').update(String(token)).digest('hex')
+const newsletterPage = (title, text, ok = true) => `<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${escapeHtml(title)} · ZYRO</title><link rel="stylesheet" href="/fonts/fonts.css?v=1"></head><body style="margin:0;background:#f5f0e8;font:16px/1.6 Inter,Arial,sans-serif;color:#241910"><main style="max-width:520px;margin:12vh auto;padding:36px;background:#fff;border-radius:24px;box-shadow:0 8px 24px rgba(48,34,22,.08)"><p style="font:400 28px Impact,'Arial Narrow',sans-serif;letter-spacing:.06em;margin:0 0 18px">ZYRO</p><div style="width:52px;height:52px;border-radius:50%;display:grid;place-items:center;background:${ok ? '#2f7d4f' : '#b42318'};color:#fff;font-size:26px;font-weight:700;margin-bottom:16px">${ok ? '✓' : '!'}</div><h1 style="font-size:28px;line-height:1.2;margin:0 0 10px">${escapeHtml(title)}</h1><p style="margin:0 0 20px;color:#4d4036">${text}</p><a href="/" style="display:inline-block;padding:12px 22px;border-radius:999px;background:#754a2d;color:#fff;text-decoration:none;font-weight:700">Zur Website</a></main></body></html>`
+
+const sendNewsletterConfirmation = async (email, name, token) => {
+  const link = `${NEWSLETTER_BASE}/api/newsletter?confirm=${token}`
+  const greeting = name ? `Hallo ${String(name).split(/\s+/)[0]},` : 'Hallo,'
+  await sendShopEmail({
+    to: email,
+    subject: 'Bitte bestätige deine Newsletter-Anmeldung · ZYRO',
+    text: `${greeting}\n\nbitte bestätige deine Anmeldung zum ZYRO-Newsletter mit diesem Link:\n${link}\n\nDer Link ist 7 Tage gültig. Wenn du dich nicht angemeldet hast, ignoriere diese E-Mail einfach – du bekommst dann keine weiteren Nachrichten.\n\nViele Grüße\nZYRO`,
+    html: `<!doctype html><html lang="de"><body style="margin:0;background:#f5f0e8;font:16px/1.6 Arial,sans-serif;color:#241910"><main style="max-width:560px;margin:32px auto;padding:36px;background:#fff;border-radius:24px"><p style="font:400 28px Impact,'Arial Narrow',sans-serif;letter-spacing:.06em;margin:0 0 20px">ZYRO</p><h1 style="font-size:26px;margin:0 0 12px">Fast geschafft!</h1><p>${escapeHtml(greeting)}</p><p>bitte bestätige deine Anmeldung zum ZYRO-Newsletter. Erst danach bekommst du Neuigkeiten, neue Sorten und Angebote von uns.</p><p style="margin:28px 0"><a href="${link}" style="display:inline-block;padding:15px 28px;border-radius:999px;background:#754a2d;color:#fff;text-decoration:none;font-weight:700">Anmeldung bestätigen</a></p><p style="font-size:13px;color:#726559">Der Link ist 7 Tage gültig. Wenn du dich nicht angemeldet hast, ignoriere diese E-Mail einfach – du bekommst dann keine weiteren Nachrichten.</p></main></body></html>`,
+  })
+}
+
+exports.newsletterPublic = onRequest({
+  region,
+  invoker: 'public',
+  cors: false,
+  maxInstances: 5,
+  timeoutSeconds: 30,
+  secrets: [orderAdminToken],
+}, async (request, response) => {
+  setCors(request, response)
+  if (request.method === 'OPTIONS') return response.status(204).send('')
+
+  if (request.method === 'GET') {
+    response.set('Cache-Control', 'no-store')
+    const query = request.query || {}
+    try {
+      if (query.img) {
+        const id = String(query.img)
+        if (!/^[A-Za-z0-9]{20}$/.test(id)) return response.status(404).send('')
+        const image = (await newsletterImagesRef.doc(id).get()).data()
+        if (!image?.data) return response.status(404).send('')
+        response.set('Cache-Control', 'public, max-age=31536000, immutable')
+        return response.type(image.contentType).send(Buffer.from(image.data, 'base64'))
+      }
+      if (query.confirm) {
+        const token = String(query.confirm)
+        if (!/^[a-f0-9]{48}$/.test(token)) return response.status(400).type('html').send(newsletterPage('Link ungültig', 'Dieser Bestätigungslink ist ungültig.', false))
+        const snapshot = await newsletterSubscribersRef.where('confirmTokenHash', '==', newsletterTokenHash(token)).limit(1).get()
+        const doc = snapshot.docs[0]
+        if (!doc) return response.status(404).type('html').send(newsletterPage('Link ungültig', 'Dieser Bestätigungslink ist ungültig oder wurde schon verwendet. Melde dich einfach noch einmal auf der Website an.', false))
+        const data = doc.data()
+        if (Date.now() - Number(data.confirmRequestedAt?.toMillis?.() || 0) > 7 * 24 * 60 * 60 * 1000) {
+          return response.status(410).type('html').send(newsletterPage('Link abgelaufen', 'Dieser Bestätigungslink ist abgelaufen. Melde dich einfach noch einmal auf der Website an.', false))
+        }
+        await doc.ref.update({
+          status: 'active',
+          confirmedAt: admin.firestore.FieldValue.serverTimestamp(),
+          confirmTokenHash: admin.firestore.FieldValue.delete(),
+          confirmIpHash: crypto.createHash('sha256').update(getClientRateLimitId(request)).digest('hex').slice(0, 32),
+        })
+        return response.type('html').send(newsletterPage('Anmeldung bestätigt', 'Willkommen im ZYRO-Newsletter! Ab jetzt erfährst du als Erste:r von neuen Sorten und Angeboten. Abmelden kannst du dich jederzeit über den Link in jeder E-Mail.'))
+      }
+      if (query.unsubscribe) {
+        const token = String(query.unsubscribe)
+        if (!/^[a-f0-9]{48}$/.test(token)) return response.status(400).type('html').send(newsletterPage('Link ungültig', 'Dieser Abmeldelink ist ungültig. Schreib uns einfach an info@zyro-getränke.de.', false))
+        const snapshot = await newsletterSubscribersRef.where('unsubscribeToken', '==', token).limit(1).get()
+        if (snapshot.docs[0]) {
+          await snapshot.docs[0].ref.update({ status: 'unsubscribed', unsubscribedAt: admin.firestore.FieldValue.serverTimestamp() })
+        }
+        return response.type('html').send(newsletterPage('Abgemeldet', 'Du bekommst keinen ZYRO-Newsletter mehr. Schade, dass du gehst – du kannst dich jederzeit wieder anmelden.'))
+      }
+      return response.status(404).send('')
+    } catch (error) {
+      console.error('Newsletter-Link fehlgeschlagen:', error.message)
+      return response.status(503).type('html').send(newsletterPage('Gerade nicht möglich', 'Bitte versuche es in ein paar Minuten noch einmal.', false))
+    }
+  }
+
+  if (request.method !== 'POST') return sendMethodError(response)
+  // One-Click-Abmeldung nach RFC 8058 (List-Unsubscribe-Post aus dem E-Mail-Programm).
+  if (request.query?.unsubscribe && /^[a-f0-9]{48}$/.test(String(request.query.unsubscribe))) {
+    const snapshot = await newsletterSubscribersRef.where('unsubscribeToken', '==', String(request.query.unsubscribe)).limit(1).get().catch(() => ({ docs: [] }))
+    if (snapshot.docs[0]) await snapshot.docs[0].ref.update({ status: 'unsubscribed', unsubscribedAt: admin.firestore.FieldValue.serverTimestamp() })
+    return response.status(200).send('ok')
+  }
+  const origin = String(request.get('origin') || '')
+  if (origin && !allowedOrigins.has(origin)) return response.status(403).json({ error: 'Anmeldung nicht zulässig.' })
+  if (String(request.body?.website || '').trim()) return response.status(202).json({ accepted: true })
+  const email = String(request.body?.email || '').trim().toLowerCase().slice(0, 254)
+  const name = String(request.body?.name || '').replace(/[\u0000-\u001f<>]+/g, ' ').trim().slice(0, 80)
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return response.status(400).json({ error: 'Bitte eine gültige E-Mail-Adresse eingeben.' })
+  if (request.body?.consent !== true) return response.status(400).json({ error: 'Bitte bestätige, dass du den Newsletter erhalten möchtest.' })
+  try {
+    await enforceContactRateLimit(request)
+  } catch (error) {
+    return response.status(429).json({ error: error.message })
+  }
+  try {
+    const ref = newsletterSubscribersRef.doc(newsletterKey(email))
+    const existing = (await ref.get()).data()
+    if (existing?.status === 'active') return response.json({ pending: false, alreadyActive: true })
+    const token = crypto.randomBytes(24).toString('hex')
+    await ref.set({
+      email,
+      name,
+      status: 'pending',
+      consentText: NEWSLETTER_CONSENT_TEXT,
+      source: 'website',
+      confirmTokenHash: newsletterTokenHash(token),
+      confirmRequestedAt: admin.firestore.FieldValue.serverTimestamp(),
+      unsubscribeToken: existing?.unsubscribeToken || crypto.randomBytes(24).toString('hex'),
+      createdAt: existing?.createdAt || admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true })
+    await sendNewsletterConfirmation(email, name, token)
+    return response.json({ pending: true })
+  } catch (error) {
+    console.error('Newsletter-Anmeldung fehlgeschlagen:', error.message)
+    return response.status(503).json({ error: 'Die Anmeldung hat gerade nicht geklappt. Bitte versuche es später erneut.' })
+  }
+})
+
+const NEWSLETTER_BATCH = 25
+const validateNewsletterCampaign = (input = {}) => {
+  const subject = String(input.subject || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 150)
+  if (!subject) throw new Error('Bitte einen Betreff eingeben.')
+  const blocks = (Array.isArray(input.blocks) ? input.blocks : []).slice(0, 60).map((block) => ({
+    type: String(block?.type || '').slice(0, 20),
+    text: String(block?.text || '').slice(0, 5000),
+    title: String(block?.title || '').slice(0, 120),
+    url: String(block?.url || '').slice(0, 800),
+    link: String(block?.link || '').slice(0, 800),
+    alt: String(block?.alt || '').slice(0, 200),
+    caption: String(block?.caption || '').slice(0, 400),
+    size: String(block?.size || '').slice(0, 10),
+    align: String(block?.align || '').slice(0, 10),
+    style: String(block?.style || '').slice(0, 10),
+    width: String(block?.width || '').slice(0, 10),
+  }))
+  if (!blocks.length) throw new Error('Der Newsletter hat noch keinen Inhalt.')
+  return { subject, preheader: String(input.preheader || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 200), blocks }
+}
+
+const sendNewsletterTo = async (campaign, subscriber) => {
+  const unsubscribeUrl = `${NEWSLETTER_BASE}/api/newsletter?unsubscribe=${subscriber.unsubscribeToken}`
+  await sendShopEmail({
+    to: subscriber.email,
+    subject: campaign.subject,
+    html: renderNewsletterHtml(campaign, { subscriber, unsubscribeUrl }),
+    text: renderNewsletterText(campaign, { subscriber, unsubscribeUrl }),
+    noReplyNotice: false,
+    headers: {
+      'List-Unsubscribe': `<${unsubscribeUrl}>`,
+      'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      Precedence: 'bulk',
+    },
+  })
+}
+
+exports.newsletterAdmin = onRequest({
+  region,
+  invoker: 'public',
+  cors: false,
+  maxInstances: 2,
+  timeoutSeconds: 300,
+  memory: '512MiB',
+  secrets: [orderAdminToken],
+}, async (request, response) => {
+  setCors(request, response)
+  if (request.method === 'OPTIONS') return response.status(204).send('')
+  if (request.method !== 'POST') return sendMethodError(response)
+  const origin = String(request.get('origin') || '')
+  if (origin && !allowedOrigins.has(origin)) return response.status(403).json({ error: 'Zugriff nicht zulässig.' })
+  try {
+    const actor = verifyAdminToken(request) ? { role: 'admin' } : await getWebAppActor(request)
+    if (actor.role !== 'admin') return response.status(403).json({ error: 'Der Newsletter ist nur für Admins.' })
+  } catch {
+    return response.status(401).json({ error: 'Bitte anmelden.' })
+  }
+  const action = String(request.body?.action || '')
+  const payload = request.body?.payload || {}
+  try {
+    if (action === 'overview') {
+      const [subscribers, campaigns] = await Promise.all([
+        newsletterSubscribersRef.orderBy('createdAt', 'desc').limit(500).get(),
+        newsletterCampaignsRef.orderBy('createdAt', 'desc').limit(20).get(),
+      ])
+      const list = subscribers.docs.map((doc) => {
+        const s = doc.data()
+        return { id: doc.id, email: s.email, name: s.name || '', status: s.status, source: s.source || '', createdAt: s.createdAt?.toDate?.().toISOString() || null, confirmedAt: s.confirmedAt?.toDate?.().toISOString() || null }
+      })
+      return response.json({
+        counts: {
+          active: list.filter((s) => s.status === 'active').length,
+          pending: list.filter((s) => s.status === 'pending').length,
+          unsubscribed: list.filter((s) => s.status === 'unsubscribed').length,
+        },
+        subscribers: list,
+        campaigns: campaigns.docs.map((doc) => {
+          const c = doc.data()
+          return { id: doc.id, subject: c.subject, status: c.status, total: c.total || 0, sent: c.sent || 0, failed: c.failed || 0, createdAt: c.createdAt?.toDate?.().toISOString() || null, finishedAt: c.finishedAt?.toDate?.().toISOString() || null, campaign: { subject: c.subject, preheader: c.preheader, blocks: c.blocks } }
+        }),
+      })
+    }
+    if (action === 'delete-subscriber') {
+      const id = String(payload.id || '')
+      if (!/^[a-f0-9]{64}$/.test(id)) return response.status(400).json({ error: 'Eintrag ungültig.' })
+      await newsletterSubscribersRef.doc(id).delete()
+      return response.json({ deleted: true })
+    }
+    if (action === 'upload-image') {
+      const match = String(payload.dataUrl || '').match(/^data:(image\/(?:jpeg|png|webp|gif));base64,([A-Za-z0-9+/=]+)$/)
+      if (!match) return response.status(400).json({ error: 'Bitte ein JPG-, PNG-, WebP- oder GIF-Bild hochladen.' })
+      const bytes = Buffer.from(match[2], 'base64')
+      if (bytes.length > 900 * 1024) return response.status(413).json({ error: 'Das Bild ist zu groß (max. 900 KB nach dem Verkleinern).' })
+      const ref = newsletterImagesRef.doc()
+      await ref.set({ contentType: match[1], data: match[2], bytes: bytes.length, createdAt: admin.firestore.FieldValue.serverTimestamp() })
+      return response.json({ url: `${NEWSLETTER_BASE}/api/newsletter?img=${ref.id}` })
+    }
+    if (action === 'test') {
+      const campaign = validateNewsletterCampaign(payload.campaign)
+      const to = String(payload.to || '').trim()
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return response.status(400).json({ error: 'Bitte eine gültige Test-Adresse eingeben.' })
+      await sendNewsletterTo({ ...campaign, subject: `[TEST] ${campaign.subject}` }, { email: to, name: 'Max Muster', unsubscribeToken: '0'.repeat(48) })
+      return response.json({ sent: true })
+    }
+    if (action === 'start') {
+      const campaign = validateNewsletterCampaign(payload.campaign)
+      const active = await newsletterSubscribersRef.where('status', '==', 'active').get()
+      if (active.empty) return response.status(409).json({ error: 'Es gibt noch keine bestätigten Abonnent:innen.' })
+      const ref = newsletterCampaignsRef.doc()
+      await ref.set({
+        ...campaign,
+        status: 'sending',
+        recipients: active.docs.map((doc) => doc.id),
+        total: active.size,
+        sent: 0,
+        failed: 0,
+        cursor: 0,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      })
+      return response.json({ campaignId: ref.id, total: active.size })
+    }
+    if (action === 'continue') {
+      const id = String(payload.campaignId || '')
+      if (!/^[A-Za-z0-9]{20}$/.test(id)) return response.status(400).json({ error: 'Versand ungültig.' })
+      const ref = newsletterCampaignsRef.doc(id)
+      const campaign = (await ref.get()).data()
+      if (!campaign) return response.status(404).json({ error: 'Versand nicht gefunden.' })
+      if (campaign.status !== 'sending') return response.json({ done: true, total: campaign.total, sent: campaign.sent, failed: campaign.failed })
+      const batch = campaign.recipients.slice(campaign.cursor, campaign.cursor + NEWSLETTER_BATCH)
+      let sent = 0
+      let failed = 0
+      for (const subscriberId of batch) {
+        const subscriber = (await newsletterSubscribersRef.doc(subscriberId).get()).data()
+        if (!subscriber || subscriber.status !== 'active') continue
+        try {
+          await sendNewsletterTo(campaign, subscriber)
+          sent += 1
+        } catch (error) {
+          failed += 1
+          console.error('Newsletter an einen Empfänger fehlgeschlagen:', error.message)
+        }
+      }
+      const cursor = campaign.cursor + batch.length
+      const done = cursor >= campaign.recipients.length
+      await ref.update({
+        cursor,
+        sent: admin.firestore.FieldValue.increment(sent),
+        failed: admin.firestore.FieldValue.increment(failed),
+        ...(done ? { status: 'sent', finishedAt: admin.firestore.FieldValue.serverTimestamp() } : {}),
+      })
+      return response.json({ done, total: campaign.total, sent: campaign.sent + sent, failed: campaign.failed + failed })
+    }
+    return response.status(400).json({ error: 'Aktion ungültig.' })
+  } catch (error) {
+    console.error('Newsletter-Verwaltung fehlgeschlagen:', error.message)
+    return response.status(error.message?.startsWith('Bitte') || error.message?.startsWith('Der Newsletter') ? 400 : 503).json({ error: error.message || 'Newsletter-Aktion fehlgeschlagen.' })
+  }
+})
+
 const toIso = (value) => value?.toDate?.().toISOString() || null
 
 exports.listBrandContactMessages = onRequest({
@@ -1675,6 +2327,8 @@ const cloudDataKeys = new Set([
   'zyro-bottler-details',
   'zyro-website-orders',
   'zyro-customers',
+  'zyro-customer-letters',
+  'zyro-qm-documents',
   'zyro-sales-target',
   'zyro-inventory',
   'zyro-stock-movements',
@@ -1788,6 +2442,8 @@ const webAppPermissions = {
   'zyro-cost-calculations': 'kalkulation',
   'zyro-website-orders': 'bestellungen',
   'zyro-customers': 'kunden',
+  'zyro-customer-letters': 'kunden',
+  'zyro-qm-documents': 'dokumente',
   'zyro-sales-target': 'analyse',
   'zyro-inventory': 'lager',
   'zyro-stock-movements': ['lager', 'mde'],
@@ -1815,15 +2471,23 @@ const webAppLoginRateLimit = async (request, username) => {
   })
 }
 
+// Pro Function-Instanz zwischengespeichert: Chunks werden nur neu gelesen, wenn sich die Revision geändert hat.
+const cloudAppDataCache = new Map()
 const readCloudAppData = async (key) => {
   const manifest = (await cloudManifestRef.get()).data()?.keys || {}
   const entry = manifest[key]
   if (!entry) return { revision: 0, value: null }
+  const cached = cloudAppDataCache.get(key)
+  if (cached && cached.revision === (Number(entry.revision) || 0) && cached.chunkCount === entry.chunkCount) {
+    return { revision: cached.revision, value: structuredClone(cached.value) }
+  }
   const refs = Array.from({ length: entry.chunkCount }, (_, index) => cloudChunksRef.doc(cloudChunkId(key, index)))
   const snapshots = await db.getAll(...refs)
   const encoded = snapshots.map((snapshot) => snapshot.data()?.data || '').join('')
   const value = JSON.parse(zlib.gunzipSync(Buffer.from(encoded, 'base64')).toString('utf8'))
-  return { revision: Number(entry.revision) || 0, value }
+  const revision = Number(entry.revision) || 0
+  cloudAppDataCache.set(key, { revision, chunkCount: entry.chunkCount, value: structuredClone(value) })
+  return { revision, value }
 }
 
 const publicWebAppUser = (user) => ({
@@ -1846,14 +2510,24 @@ const verifyWebAppPassword = (password, passwordHash) => {
   return actual.length === expected.length && crypto.timingSafeEqual(actual, expected)
 }
 
+// Kurzer Sitzungs-Cache (je Instanz), spart einen Lesevorgang pro Anfrage.
+const webAppSessionCache = new Map()
+const webAppSessionCacheMs = 60 * 1000
 const getWebAppActor = async (request) => {
   const authorization = String(request.get('authorization') || '')
   const sessionToken = authorization.startsWith('Bearer ') ? authorization.slice(7) : ''
   if (!/^[A-Za-z0-9_-]{43}$/.test(sessionToken)) throw new Error('Anmeldung erforderlich.')
   const sessionId = crypto.createHash('sha256').update(sessionToken).digest('hex')
-  const sessionSnapshot = await db.collection('webAppSessions').doc(sessionId).get()
-  const session = sessionSnapshot.data()
-  if (!session || !session.expiresAt || session.expiresAt.toMillis() <= Date.now()) {
+  let session = webAppSessionCache.get(sessionId)
+  if (!session || session.cachedAt < Date.now() - webAppSessionCacheMs) {
+    const sessionSnapshot = await db.collection('webAppSessions').doc(sessionId).get()
+    const data = sessionSnapshot.data()
+    session = data ? { userId: data.userId, expiresAtMs: data.expiresAt?.toMillis?.() || 0, cachedAt: Date.now() } : null
+    if (session) webAppSessionCache.set(sessionId, session)
+    else webAppSessionCache.delete(sessionId)
+  }
+  if (!session || !session.expiresAtMs || session.expiresAtMs <= Date.now()) {
+    webAppSessionCache.delete(sessionId)
     throw new Error('Anmeldung abgelaufen. Bitte erneut anmelden.')
   }
   const { value: users } = await readCloudAppData('zyro-users')
@@ -2084,6 +2758,21 @@ exports.webAppCalls = onRequest({
 
 const webAppRecordId = (key, record) => key === 'zyro-inventory' ? record?.item : record?.id
 
+// Ausgefüllte Behördenformulare: nur Textwerte, begrenzte Größe; Löschen nur durch Admins (Nachweispflicht).
+const validateQmDocumentEntries = (nextValue) => {
+  if (nextValue.length > 5000) throw new Error('Zu viele Formulare gespeichert.')
+  for (const record of nextValue) {
+    if (!record || typeof record !== 'object' || typeof record.id !== 'string' || !record.id || record.id.length > 80
+      || !/^[A-G]\d{2}$/.test(String(record.no || ''))
+      || String(record.name || '').length > 200
+      || !record.values || typeof record.values !== 'object' || Array.isArray(record.values)
+      || Object.keys(record.values).length > 2000
+      || Object.values(record.values).some((value) => typeof value !== 'string' || value.length > 5000)) {
+      throw new Error('Formular ungültig.')
+    }
+  }
+}
+
 const validateWebAppWrite = (key, currentValue, nextValue, actor, allowScheduleRequestAction = false) => {
   if (!webAppWritableKeys.has(key) || !Array.isArray(nextValue)) throw new Error('Datensatz ungültig oder schreibgeschützt.')
   if (key === 'zyro-sales-target') {
@@ -2100,6 +2789,8 @@ const validateWebAppWrite = (key, currentValue, nextValue, actor, allowScheduleR
     validateElsterSetupEntries(currentValue, nextValue, actor)
     return
   }
+  // Inhalt prüfen; Berechtigung „dokumente“ und Lösch-Schutz folgen in der allgemeinen Prüfung unten.
+  if (key === 'zyro-qm-documents') validateQmDocumentEntries(nextValue)
   if (key === 'zyro-company-details') {
     validateCompanyDetailsEntries(nextValue, actor)
     return
@@ -2721,6 +3412,18 @@ const confirmOrderDelivery = async (orderId, source) => updateDeliveryReviewStat
   document.deliveryConfirmationSource ||= source
 })
 
+// Widerspruch gegen Bewertungsanfragen (§ 7 Abs. 3 UWG): Sperrliste je E-Mail-Adresse.
+const reviewOptOutKey = (email) => crypto.createHash('sha256').update(String(email || '').trim().toLowerCase()).digest('hex')
+const isReviewOptedOut = async (email) => (await db.collection('reviewOptOuts').doc(reviewOptOutKey(email)).get()).exists
+const createReviewOptOutLink = async (email) => {
+  const token = crypto.randomBytes(24).toString('hex')
+  await db.collection('reviewOptOutTokens').doc(hashReviewToken(token)).set({
+    emailKey: reviewOptOutKey(email),
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  })
+  return `https://xn--zyro-getrnke-ocb.de/api/review?optout=${token}`
+}
+
 const sendDeliveryReviewRequest = async (orderId, shopProducts) => {
   let deliveryToken = ''
   const claimed = await updateDeliveryReviewState(orderId, (document) => {
@@ -2763,12 +3466,25 @@ const sendDeliveryReviewRequest = async (orderId, shopProducts) => {
   }
   const reviewUrl = `https://xn--zyro-getrnke-ocb.de/bewertung.html?token=${encodeURIComponent(deliveryToken)}`
   const orderNumber = document.number || document.id
+  if (await isReviewOptedOut(document.recipientEmail)) {
+    const skipped = await updateDeliveryReviewState(orderId, (current) => {
+      current.reviewRequestStatus = 'skipped'
+      current.reviewRequestError = 'Kunde hat Bewertungsanfragen widersprochen.'
+    })
+    return { sent: false, status: 'skipped', error: 'Kunde hat Bewertungsanfragen widersprochen.', salesDocuments: skipped.salesDocuments }
+  }
+  let optOutUrl = 'mailto:info@xn--zyro-getrnke-ocb.de?subject=Keine%20Bewertungsanfragen'
+  try {
+    optOutUrl = await createReviewOptOutLink(document.recipientEmail)
+  } catch (error) {
+    console.error('Abmeldelink für Bewertungsanfragen konnte nicht erstellt werden:', error.message)
+  }
   try {
     await sendShopEmail({
       to: document.recipientEmail,
       subject: `Wie war deine Bestellung ${orderNumber}? · ZYRO`,
-      text: `Hallo!\n\nDeine Bestellung ${orderNumber} wurde zugestellt. Wie schmeckt dein ZYRO-Getränk? Teile deine Bewertung mit uns: ${reviewUrl}\n\nBewertungen werden vor der Veröffentlichung geprüft. Der persönliche Bewertungslink ist 90 Tage gültig.\n\nViele Grüße\nZYRO`,
-      html: `<!doctype html><html lang="de"><body style="margin:0;background:#f3f6ed;font:16px/1.6 Arial,sans-serif;color:#14251d"><main style="max-width:560px;margin:32px auto;padding:32px;background:#fff;border-radius:20px"><p style="font-weight:700;letter-spacing:3px;color:#57752b">ZYRO · TASTE THE DIFFERENCE.</p><h1 style="font-size:30px">Dein Paket ist da! ✨</h1><p>Hallo!</p><p>Deine Bestellung <strong>${escapeEmailHtml(orderNumber)}</strong> wurde zugestellt. Jetzt sind wir neugierig: Wie schmeckt dein ZYRO-Getränk?</p><p style="margin:28px 0"><a href="${escapeEmailHtml(reviewUrl)}" style="display:inline-block;padding:14px 22px;background:#14251d;border-radius:12px;color:#d7f36a;text-decoration:none;font-weight:700">Jetzt Bewertung schreiben</a></p><p>Dein persönlicher Bewertungslink ist 90 Tage gültig. Bewertungen werden vor der Veröffentlichung geprüft.</p><p>Viele Grüße<br><strong>Dein ZYRO-Team</strong></p></main></body></html>`,
+      text: `Hallo!\n\nDeine Bestellung ${orderNumber} wurde zugestellt. Wie schmeckt dein ZYRO-Getränk? Teile deine Bewertung mit uns: ${reviewUrl}\n\nBewertungen werden vor der Veröffentlichung geprüft. Der persönliche Bewertungslink ist 90 Tage gültig.\n\nViele Grüße\nZYRO\n\nDu möchtest keine Bewertungsanfragen mehr von uns? Hier abmelden: ${optOutUrl}`,
+      html: `<!doctype html><html lang="de"><body style="margin:0;background:#f3f6ed;font:16px/1.6 Arial,sans-serif;color:#14251d"><main style="max-width:560px;margin:32px auto;padding:32px;background:#fff;border-radius:20px"><p style="font-weight:700;letter-spacing:3px;color:#57752b">ZYRO · TASTE THE DIFFERENCE.</p><h1 style="font-size:30px">Dein Paket ist da! ✨</h1><p>Hallo!</p><p>Deine Bestellung <strong>${escapeEmailHtml(orderNumber)}</strong> wurde zugestellt. Jetzt sind wir neugierig: Wie schmeckt dein ZYRO-Getränk?</p><p style="margin:28px 0"><a href="${escapeEmailHtml(reviewUrl)}" style="display:inline-block;padding:14px 22px;background:#14251d;border-radius:12px;color:#d7f36a;text-decoration:none;font-weight:700">Jetzt Bewertung schreiben</a></p><p>Dein persönlicher Bewertungslink ist 90 Tage gültig. Bewertungen werden vor der Veröffentlichung geprüft.</p><p>Viele Grüße<br><strong>Dein ZYRO-Team</strong></p><p style="margin-top:28px;font-size:12px;color:#6b7a70">Du möchtest keine Bewertungsanfragen mehr von uns? <a href="${escapeEmailHtml(optOutUrl)}" style="color:#6b7a70">Hier abmelden</a>. Deine E-Mail-Adresse nutzen wir dann nur noch für deine Bestellungen.</p></main></body></html>`,
     })
   } catch (error) {
     const failed = await updateDeliveryReviewState(orderId, (current) => {
@@ -3433,6 +4149,7 @@ exports.webAppAuth = onRequest({
     if (action === 'logout') {
       const sessionToken = String(request.get('authorization') || '').slice(7)
       const sessionId = crypto.createHash('sha256').update(sessionToken).digest('hex')
+      webAppSessionCache.delete(sessionId)
       await db.collection('webAppSessions').doc(sessionId).delete()
       return response.json({ success: true })
     }
@@ -3687,6 +4404,561 @@ exports.webAppFinanceReceipt = onRequest({
   }
 })
 
+// Rechnungs-PDF für Paywise: bevorzugt genau die PDF, die der Kunde erhalten hat (Kundenportal),
+// sonst wird sie serverseitig aus den Rechnungsdaten neu erzeugt.
+const loadInvoicePdfForPaywise = async (invoice, products) => {
+  const snapshot = await db.collection('customerPortalInvoices')
+    .where('number', '==', String(invoice.number))
+    .limit(10)
+    .get()
+  const sent = snapshot.docs
+    .map((entry) => entry.data())
+    .filter((entry) => typeof entry.contentBase64 === 'string' && entry.contentBase64)
+    .sort((a, b) => Number(b.publishedAt?.toMillis?.() || 0) - Number(a.publishedAt?.toMillis?.() || 0))[0]
+  if (sent) {
+    const pdf = Buffer.from(sent.contentBase64, 'base64')
+    if (pdf.subarray(0, 4).toString() === '%PDF') return { pdf, source: 'versendet' }
+  }
+  const { value: savedCompanyDetails } = await readCloudAppData('zyro-company-details')
+  const companyDetails = Array.isArray(savedCompanyDetails) && savedCompanyDetails.length
+    ? validateCompanyDetailsEntries(savedCompanyDetails, { role: 'admin' })
+    : defaultCompanyDetails
+  return { pdf: await buildInvoicePdf(invoice, products, companyDetails), source: 'neu erzeugt' }
+}
+
+// ---------------------------------------------------------------------------
+// Paywise-Mahnservice: Rechnung ins automatische Mahnwesen geben, Mahnstatus lesen, Zahlung melden.
+// Läuft über dieselbe Function/Bridge wie das Inkasso (Aktionen mit Präfix „mahnservice-“).
+// ---------------------------------------------------------------------------
+const mahnserviceEligibleStatuses = new Set(['Ausgestellt', 'Versendet', 'Überfällig'])
+const mahnserviceRecordRef = (invoiceId) => db.collection('paywiseMahnserviceInvoices')
+  .doc(crypto.createHash('sha256').update(String(invoiceId)).digest('hex'))
+const isPaywiseUuid = (value) => /^[0-9a-f-]{36}$/i.test(String(value || ''))
+const berlinDate = () => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit',
+}).format(new Date())
+
+const summarizeMahnservice = (record, paywiseInvoice, dunning) => ({
+  submitted: Boolean(record?.released),
+  status: String(record?.status || ''),
+  paywiseInvoiceId: record?.paywiseInvoiceId || '',
+  dunningState: String(paywiseInvoice?.dunning_state || dunning?.dunning_state || dunning?.state || record?.dunningState || ''),
+  dunningStateLabel: mahnserviceDunningStateLabels[paywiseInvoice?.dunning_state || dunning?.dunning_state || dunning?.state || record?.dunningState] || '',
+  balance: paywiseInvoice?.balance ?? null,
+  paidAmount: paywiseInvoice?.paid_amount ?? null,
+  hasDocument: Boolean(paywiseInvoice?.has_document ?? record?.documentStatus === 'ready'),
+  currentLevel: dunning?.current_level ?? dunning?.level ?? null,
+  nextActionDate: dunning?.next_action_date || dunning?.next_action_at || null,
+  notices: Array.isArray(dunning?.notices) ? dunning.notices.slice(0, 20).map((notice) => ({
+    level: notice.level ?? null,
+    sentAt: notice.sent_at || notice.created || null,
+    channel: notice.channel || null,
+    fee: notice.fee?.value ?? notice.fee ?? null,
+  })) : [],
+  releasedAt: record?.releasedAt || null,
+})
+
+const findOrCreateMahnserviceDebtor = async (apiKey, invoice, debtor) => {
+  const customerKey = String(invoice.customerId || debtor.email || debtor.name).toLocaleLowerCase()
+  const mappingRef = db.collection('paywiseMahnserviceDebtors')
+    .doc(crypto.createHash('sha256').update(`${apiKey.startsWith('pw_sbx_') ? 'sbx' : 'prod'}:${customerKey}`).digest('hex'))
+  const mapping = (await mappingRef.get()).data()
+  if (isPaywiseUuid(mapping?.debtorId)) return mapping.debtorId
+
+  const customerNumber = String(invoice.customerId || '').slice(0, 50)
+    || `ZYRO-${crypto.createHash('sha256').update(customerKey).digest('hex').slice(0, 20)}`
+  const found = await callPaywiseApi(apiKey, `${MAHNSERVICE_BASE}/debtors/?customer_number=${encodeURIComponent(customerNumber)}`)
+  const list = Array.isArray(found) ? found : Array.isArray(found?.results) ? found.results : []
+  let debtorId = list.find((entry) => isPaywiseUuid(entry?.id))?.id
+  if (!debtorId) {
+    const created = await callPaywiseApi(apiKey, `${MAHNSERVICE_BASE}/debtors/`, {
+      method: 'POST',
+      body: buildMahnserviceDebtorPayload(debtor, customerNumber),
+    })
+    if (!isPaywiseUuid(created.id)) throw new Error('Paywise hat keine gültige Schuldner-ID für den Mahnservice zurückgegeben.')
+    debtorId = created.id
+  }
+  await mappingRef.set({ debtorId, customerNumber, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
+  return debtorId
+}
+
+const handleMahnserviceAction = async ({ action, body, actor, apiKey }) => {
+  const invoiceId = String(body?.invoiceId || '')
+  if (!invoiceId || invoiceId.length > 200) throw new Error('Rechnungs-ID ungültig.')
+  const recordRef = mahnserviceRecordRef(invoiceId)
+  const record = (await recordRef.get()).data()
+
+  if (action === 'mahnservice-get') {
+    if (!isPaywiseUuid(record?.paywiseInvoiceId)) return summarizeMahnservice(record)
+    const paywiseInvoice = await callPaywiseApi(apiKey, `${MAHNSERVICE_BASE}/invoices/${record.paywiseInvoiceId}/`)
+    const dunning = record.released
+      ? await callPaywiseApi(apiKey, `${MAHNSERVICE_BASE}/invoices/${record.paywiseInvoiceId}/dunning/`).catch(() => null)
+      : null
+    const summary = summarizeMahnservice(record, paywiseInvoice, dunning)
+    if (summary.dunningState && summary.dunningState !== record.dunningState) {
+      await recordRef.update({ dunningState: summary.dunningState, updatedAt: admin.firestore.FieldValue.serverTimestamp() })
+    }
+    return summary
+  }
+
+  if (action === 'mahnservice-payment') {
+    // Rechnung wurde in ZYRO als bezahlt markiert → offenen Restbetrag an Paywise melden, damit keine Mahnung mehr rausgeht.
+    if (!isPaywiseUuid(record?.paywiseInvoiceId)) return { skipped: true }
+    const paywiseInvoice = await callPaywiseApi(apiKey, `${MAHNSERVICE_BASE}/invoices/${record.paywiseInvoiceId}/`)
+    const balance = Number(paywiseInvoice.balance || 0)
+    if (!(balance > 0)) return { reported: false, alreadySettled: true, dunningState: paywiseInvoice.dunning_state || '' }
+    const valueDate = /^\d{4}-\d{2}-\d{2}$/.test(String(body?.valueDate || '')) && body.valueDate <= berlinDate() ? body.valueDate : berlinDate()
+    try {
+      await callPaywiseApi(apiKey, `${MAHNSERVICE_BASE}/invoices/${record.paywiseInvoiceId}/payments/`, {
+        method: 'POST',
+        body: { amount: balance.toFixed(2), value_date: valueDate, reference: `ZYRO ${String(record.invoiceNumber || '').slice(0, 60)} bezahlt` },
+      })
+    } catch (error) {
+      if (!['duplicate_payment'].includes(error.paywiseCode)) throw error
+    }
+    await recordRef.update({ paymentReportedAt: new Date().toISOString(), updatedAt: admin.firestore.FieldValue.serverTimestamp() })
+    return { reported: true, amount: balance.toFixed(2) }
+  }
+
+  if (action !== 'mahnservice-submit') throw new Error('Paywise-Aktion ungültig.')
+  if (record?.released) return { ...summarizeMahnservice(record), alreadySubmitted: true }
+
+  const [{ value: salesDocuments }, { value: products }] = await Promise.all([
+    readCloudAppData('zyro-sales-documents'),
+    readCloudAppData('zyro-products'),
+  ])
+  const invoice = (Array.isArray(salesDocuments) ? salesDocuments : []).find((document) => String(document.id) === invoiceId)
+  if (!invoice) throw new Error('Rechnung wurde nicht gefunden.')
+  if (invoice.kind !== 'rechnung' || !mahnserviceEligibleStatuses.has(invoice.status)) {
+    throw new Error('Nur ausgestellte, versendete oder überfällige Rechnungen können in den Mahnservice gegeben werden.')
+  }
+  const inkasso = (await db.collection('paywiseInkassoSubmissions')
+    .doc(crypto.createHash('sha256').update(invoiceId).digest('hex')).get()).data()
+  if (inkasso?.status === 'submitted') throw new Error('Diese Rechnung ist bereits beim Paywise-Inkasso – sie kann nicht zusätzlich in den Mahnservice.')
+  const debtor = normalizeMahnserviceDebtor(body)
+  const amount = calculateInvoicePayableTotal(invoice, Array.isArray(products) ? products : [])
+
+  const now = Date.now()
+  let current = await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(recordRef)
+    const existing = snapshot.data()
+    if (existing?.status === 'processing' && Number(existing.leaseUntil || 0) > now) {
+      throw new Error('Die Mahnservice-Übergabe für diese Rechnung läuft bereits. Bitte kurz warten.')
+    }
+    const next = {
+      ...(existing || {}),
+      invoiceId,
+      invoiceNumber: String(invoice.number),
+      actorId: String(actor.id),
+      actorName: String(actor.name || ''),
+      environment: apiKey.startsWith('pw_sbx_') ? 'sandbox' : 'production',
+      status: 'processing',
+      leaseUntil: now + 150000,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      ...(existing ? {} : { createdAt: admin.firestore.FieldValue.serverTimestamp() }),
+    }
+    transaction.set(recordRef, next)
+    return next
+  })
+
+  const save = async (changes) => {
+    current = { ...current, ...changes }
+    await recordRef.update({ ...changes, updatedAt: admin.firestore.FieldValue.serverTimestamp() })
+  }
+  try {
+    if (!isPaywiseUuid(current.debtorId)) await save({ debtorId: await findOrCreateMahnserviceDebtor(apiKey, invoice, debtor) })
+
+    if (!isPaywiseUuid(current.paywiseInvoiceId)) {
+      // invoice_number ist bei Paywise der Idempotenzschlüssel – ein zweiter Aufruf liefert dieselbe Rechnung.
+      const created = await callPaywiseApi(apiKey, `${MAHNSERVICE_BASE}/invoices/`, {
+        method: 'POST',
+        body: buildMahnserviceInvoicePayload({ invoice, amount, debtorId: current.debtorId }),
+      })
+      if (!isPaywiseUuid(created.id)) throw new Error('Paywise hat keine gültige Rechnungs-ID für den Mahnservice zurückgegeben.')
+      await save({ paywiseInvoiceId: created.id, dunningState: String(created.dunning_state || 'held') })
+    }
+
+    // Rechnungs-PDF direkt mitschicken (nur möglich, solange die Rechnung noch nicht freigegeben ist).
+    if (!isPaywiseUuid(current.documentId)) {
+      const { pdf, source } = await loadInvoicePdfForPaywise(invoice, Array.isArray(products) ? products : [])
+      const filename = buildPaywiseInvoiceDocumentPayload(invoice.number, pdf).filename
+      const uploaded = await uploadPaywisePdf(apiKey, `${MAHNSERVICE_BASE}/invoices/${current.paywiseInvoiceId}/documents/`, pdf, filename)
+      if (!isPaywiseUuid(uploaded.id)) throw new Error('Paywise hat keine gültige Beleg-ID für die Rechnungs-PDF zurückgegeben.')
+      await save({ documentId: uploaded.id, documentSource: source, documentStatus: 'pending' })
+    }
+    if (current.documentStatus !== 'ready') {
+      try {
+        await waitForPaywiseDocument(apiKey, null, null, {
+          path: `${MAHNSERVICE_BASE}/invoices/${current.paywiseInvoiceId}/documents/${current.documentId}/`,
+        })
+      } catch (error) {
+        if (error.paywiseDocumentRejected) await save({ documentId: admin.firestore.FieldValue.delete(), documentStatus: 'rejected' })
+        throw error
+      }
+      await save({ documentStatus: 'ready' })
+    }
+
+    const released = await callPaywiseApi(apiKey, `${MAHNSERVICE_BASE}/invoices/${current.paywiseInvoiceId}/release/`, { method: 'POST' })
+    const releasedAt = new Date().toISOString()
+    await save({
+      released: true,
+      releasedAt,
+      status: 'submitted',
+      leaseUntil: 0,
+      dunningState: String(released?.dunning_state || 'pending'),
+    })
+    return summarizeMahnservice(current, released)
+  } catch (error) {
+    await recordRef.update({ status: 'retryable', leaseUntil: 0, updatedAt: admin.firestore.FieldValue.serverTimestamp() }).catch(() => {})
+    if (error.paywiseCode === 'subscription_required') {
+      throw new Error('Paywise: Für dieses Konto ist der Mahnservice noch nicht gebucht. Bitte im Paywise-Portal unter „Mahnservice“ aktivieren.')
+    }
+    if (error.paywiseCode === 'no_default_dunning_flow') {
+      throw new Error('Paywise: Es ist noch kein Mahnlauf eingerichtet. Bitte im Paywise-Portal unter Mahnservice → „Erste Schritte“ einen Mahnlauf speichern und aktivieren.')
+    }
+    throw error
+  }
+}
+
+exports.paywiseInkasso = onRequest({
+  region,
+  invoker: 'public',
+  cors: false,
+  maxInstances: 3,
+  timeoutSeconds: 120,
+  memory: '512MiB',
+  secrets: [paywiseApiKey, orderAdminToken],
+}, async (request, response) => {
+  setCors(request, response)
+  if (request.method === 'OPTIONS') return response.status(204).send('')
+  if (request.method !== 'POST') return sendMethodError(response)
+  const origin = String(request.get('origin') || '')
+  if (origin && !allowedOrigins.has(origin)) return response.status(403).json({ error: 'Paywise-Zugriff nicht zulässig.' })
+
+  try {
+    // Desktop-App (Haupt-PC) meldet sich mit dem Website-Admin-Token an, die Web-App mit ihrer Sitzung.
+    const desktopActor = request.body?.desktopActor
+    const actor = verifyAdminToken(request)
+      ? {
+        id: `desktop:${String(desktopActor?.id || 'admin').slice(0, 80)}`,
+        name: String(desktopActor?.name || 'Desktop-Admin').slice(0, 100),
+        role: 'admin',
+      }
+      : await getWebAppActor(request)
+    if (actor.role !== 'admin') return response.status(403).json({ error: 'Inkassoaufträge dürfen nur von einem Admin übergeben werden.' })
+    const apiKey = paywiseApiKey.value().trim()
+    if (!apiKey) return response.status(503).json({ error: 'Paywise-API-Schlüssel ist nicht serverseitig eingerichtet.' })
+    const expectedEnvironment = apiKey.startsWith('pw_sbx_') ? 'sandbox' : 'production'
+
+    const action = String(request.body?.action || '')
+    if (action === 'status') {
+      const info = await callPaywiseApi(apiKey, '/v2/info/')
+      if (!['sandbox', 'production'].includes(info.environment) || info.environment !== expectedEnvironment) {
+        return response.status(502).json({ error: 'Paywise hat eine unerwartete API-Umgebung zurückgegeben. Schlüssel und Endpunkt prüfen.' })
+      }
+      return response.json({
+        configured: true,
+        environment: String(info.environment || ''),
+        company: String(info.company || ''),
+      })
+    }
+    if (action.startsWith('mahnservice-')) {
+      return response.json(await handleMahnserviceAction({ action, body: request.body, actor, apiKey }))
+    }
+    if (action !== 'submit') return response.status(400).json({ error: 'Paywise-Aktion ungültig.' })
+
+    const invoiceId = String(request.body?.invoiceId || '')
+    if (!invoiceId || invoiceId.length > 200) return response.status(400).json({ error: 'Rechnungs-ID ungültig.' })
+    const [{ value: salesDocuments }, { value: products }] = await Promise.all([
+      readCloudAppData('zyro-sales-documents'),
+      readCloudAppData('zyro-products'),
+    ])
+    const invoice = (Array.isArray(salesDocuments) ? salesDocuments : []).find((document) => String(document.id) === invoiceId)
+    if (!invoice) return response.status(404).json({ error: 'Rechnung wurde nicht gefunden.' })
+    if (invoice.kind !== 'rechnung' || invoice.status !== 'Überfällig') {
+      return response.status(409).json({ error: 'Nur als überfällig markierte Rechnungen können an Paywise übergeben werden.' })
+    }
+    if (!String(invoice.number || '').trim()) return response.status(409).json({ error: 'Die Rechnung hat keine gültige Rechnungsnummer.' })
+    const mahnservice = (await mahnserviceRecordRef(invoiceId).get()).data()
+    if (mahnservice?.released && !['cancelled', 'written_off', 'paid'].includes(mahnservice.dunningState)) {
+      return response.status(409).json({ error: 'Diese Rechnung läuft im Paywise-Mahnservice. Nach der letzten Mahnstufe übergibt Paywise sie automatisch ans Inkasso.' })
+    }
+    const berlinToday = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Europe/Berlin',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date())
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(invoice.dueDate || '')) || invoice.dueDate > berlinToday) {
+      return response.status(409).json({ error: 'Die Rechnung ist laut Fälligkeitsdatum noch nicht überfällig.' })
+    }
+
+    const invoiceRef = db.collection('paywiseInkassoSubmissions')
+      .doc(crypto.createHash('sha256').update(invoiceId).digest('hex'))
+    const currentSnapshot = await invoiceRef.get()
+    const currentSubmission = currentSnapshot.data()
+    if (currentSubmission?.status === 'submitted') {
+      return response.json({
+        submitted: true,
+        alreadySubmitted: true,
+        orderId: currentSubmission.orderId,
+        claimId: currentSubmission.claimId,
+        invoiceNumber: currentSubmission.invoiceNumber,
+        submittedAt: currentSubmission.submittedAt,
+      })
+    }
+
+    const submission = normalizePaywiseSubmission({
+      ...request.body,
+      documentDate: invoice.documentDate,
+      dueDate: invoice.dueDate,
+    })
+    if (expectedEnvironment === 'production' && request.body?.productionConfirmed !== true) {
+      return response.status(400).json({ error: 'Für echte Produktionsübergaben ist eine zusätzliche Bestätigung erforderlich.' })
+    }
+    const info = await callPaywiseApi(apiKey, '/v2/info/')
+    if (info.environment !== expectedEnvironment) {
+      return response.status(502).json({ error: 'Paywise-API-Schlüssel und API-Umgebung stimmen nicht überein.' })
+    }
+    const amount = calculateInvoicePayableTotal(invoice, Array.isArray(products) ? products : [])
+    const submissionFingerprint = crypto.createHash('sha256')
+      .update(JSON.stringify({
+        invoiceId,
+        invoiceNumber: invoice.number,
+        amount,
+        submission,
+      }))
+      .digest('hex')
+    const now = Date.now()
+    const reservation = await db.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(invoiceRef)
+      const existing = snapshot.data()
+      if (existing?.status === 'submitted') return { alreadySubmitted: true, record: existing }
+      if (existing?.status === 'processing' && Number(existing.leaseUntil || 0) > now) {
+        throw new Error('Die Paywise-Übergabe für diese Rechnung läuft bereits. Bitte warten und anschließend erneut prüfen.')
+      }
+      if (existing?.submissionFingerprint && existing.submissionFingerprint !== submissionFingerprint) {
+        throw new Error('Für diese Rechnung existiert bereits ein Übergabeversuch mit anderen Schuldner- oder Forderungsdaten. Bitte vor einem neuen Versuch den Vorgang im Paywise-Portal prüfen.')
+      }
+      const record = {
+        ...(existing || {}),
+        invoiceId,
+        invoiceNumber: String(invoice.number),
+        actorId: String(actor.id),
+        actorName: String(actor.name || ''),
+        status: 'processing',
+        phase: existing?.phase || 'debtor',
+        submissionFingerprint,
+        debtorReference: existing?.debtorReference || `ZYRO-${crypto.createHash('sha256').update(invoiceId).digest('hex').slice(0, 32)}`,
+        debtorCommandId: existing?.debtorCommandId || crypto.randomUUID(),
+        orderCommandId: existing?.orderCommandId || crypto.randomUUID(),
+        documentCommandId: existing?.documentCommandId || crypto.randomUUID(),
+        finalizeCommandId: existing?.finalizeCommandId || crypto.randomUUID(),
+        leaseUntil: now + 180000,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        ...(existing ? {} : { createdAt: admin.firestore.FieldValue.serverTimestamp() }),
+      }
+      transaction.set(invoiceRef, record)
+      return { alreadySubmitted: false, record }
+    })
+    if (reservation.alreadySubmitted) {
+      return response.json({
+        submitted: true,
+        alreadySubmitted: true,
+        orderId: reservation.record.orderId,
+        claimId: reservation.record.claimId,
+        invoiceNumber: reservation.record.invoiceNumber,
+        submittedAt: reservation.record.submittedAt,
+      })
+    }
+
+    let record = reservation.record
+    try {
+      if (!record.debtorId) {
+        const debtor = await callPaywiseApi(apiKey, '/v2/debtors/', {
+          method: 'POST',
+          body: buildPaywiseDebtorPayload(submission, record.debtorReference),
+          idempotencyKey: record.debtorCommandId,
+        })
+        if (!/^[0-9a-f-]{36}$/i.test(String(debtor.id || ''))) {
+          throw new Error('Paywise hat keine gültige Schuldner-ID zurückgegeben. Bitte im Paywise-Portal prüfen, bevor du es erneut versuchst.')
+        }
+        record = { ...record, debtorId: debtor.id, phase: 'order' }
+        await invoiceRef.update({
+          debtorId: debtor.id,
+          phase: 'order',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        })
+      }
+
+      if (!record.orderId) {
+        const order = await callPaywiseApi(apiKey, '/v2/orders/', {
+          method: 'POST',
+          body: buildPaywiseOrderPayload({
+            debtorId: record.debtorId,
+            invoice,
+            submission,
+            amount,
+          }),
+          idempotencyKey: record.orderCommandId,
+        })
+        const matchingClaims = Array.isArray(order.claims)
+          ? order.claims.filter((claim) => claim.your_reference === `ZYRO-${String(invoice.id).slice(0, 180)}`)
+          : []
+        if (!/^[0-9a-f-]{36}$/i.test(String(order.id || '')) || matchingClaims.length !== 1
+          || !/^[0-9a-f-]{36}$/i.test(String(matchingClaims[0].id || ''))) {
+          throw new Error('Paywise hat keine eindeutige Auftrags- und Forderungs-ID zurückgegeben. Bitte im Paywise-Portal prüfen.')
+        }
+        record = { ...record, orderId: order.id, claimId: matchingClaims[0].id, phase: 'document' }
+        await invoiceRef.update({
+          orderId: order.id,
+          claimId: matchingClaims[0].id,
+          phase: 'document',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        })
+      }
+
+      // Rechnung direkt an Paywise übermitteln: PDF an die Forderung hängen, bevor der Auftrag eingereicht wird.
+      if (!record.documentId) {
+        const { pdf, source } = await loadInvoicePdfForPaywise(invoice, Array.isArray(products) ? products : [])
+        const uploaded = await callPaywiseApi(apiKey, `/v2/claims/${record.claimId}/documents/`, {
+          method: 'POST',
+          body: buildPaywiseInvoiceDocumentPayload(invoice.number, pdf),
+          idempotencyKey: record.documentCommandId,
+        })
+        if (!/^[0-9a-f-]{36}$/i.test(String(uploaded.id || ''))) {
+          throw new Error('Paywise hat keine gültige Beleg-ID für die Rechnungs-PDF zurückgegeben. Bitte im Paywise-Portal prüfen.')
+        }
+        record = { ...record, documentId: uploaded.id, documentSource: source }
+        await invoiceRef.update({
+          documentId: uploaded.id,
+          documentSource: source,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        })
+      }
+      if (record.documentStatus !== 'ready') {
+        await waitForPaywiseDocument(apiKey, record.claimId, record.documentId)
+        record = { ...record, documentStatus: 'ready', phase: 'finalize' }
+        await invoiceRef.update({
+          documentStatus: 'ready',
+          phase: 'finalize',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        })
+      }
+
+      await callPaywiseApi(apiKey, `/v2/orders/${record.orderId}/finalize/`, {
+        method: 'POST',
+        idempotencyKey: record.finalizeCommandId,
+      })
+      const submittedAt = new Date().toISOString()
+      await invoiceRef.update({
+        status: 'submitted',
+        phase: 'submitted',
+        submittedAt,
+        leaseUntil: 0,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      })
+      return response.json({
+        submitted: true,
+        orderId: record.orderId,
+        claimId: record.claimId,
+        documentId: record.documentId,
+        documentAttached: true,
+        invoiceNumber: String(invoice.number),
+        submittedAt,
+      })
+    } catch (error) {
+      await invoiceRef.update({
+        status: 'retryable',
+        leaseUntil: 0,
+        // Abgelehnter Beleg: beim nächsten Versuch als Ersatz mit neuem Idempotency-Key hochladen.
+        ...(error.paywiseDocumentRejected ? {
+          documentId: admin.firestore.FieldValue.delete(),
+          documentStatus: admin.firestore.FieldValue.delete(),
+          documentCommandId: crypto.randomUUID(),
+        } : {}),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      })
+      throw error
+    }
+  } catch (error) {
+    const status = error.message.includes('Anmeldung') || error.message.includes('Benutzerkonto') ? 401
+      : error.message.includes('Admin') ? 403
+        : error.message.includes('nicht gefunden') ? 404
+          : error.message.startsWith('Paywise') || error.message.includes('nicht erreichbar') ? 502
+            : error.message.includes('läuft bereits') || error.message.includes('Übergabeversuch') ? 409
+              : 400
+    if (status >= 500) console.error('Paywise-Inkasso fehlgeschlagen.')
+    return response.status(status).json({ error: error.message || 'Paywise-Anfrage fehlgeschlagen.' })
+  }
+})
+
+// Paywise-Webhooks: Ereignisse zu übergebenen Fällen (z. B. Zahlungseingang beim Inkasso).
+// Adresse bei Paywise: https://europe-west3-zyro-78855.cloudfunctions.net/paywiseWebhook
+exports.paywiseWebhook = onRequest({
+  region,
+  invoker: 'public',
+  cors: false,
+  maxInstances: 3,
+  timeoutSeconds: 30,
+  secrets: [paywiseWebhookSecret],
+}, async (request, response) => {
+  if (request.method !== 'POST') return sendMethodError(response)
+  const rawBody = request.rawBody
+  if (!Buffer.isBuffer(rawBody) || rawBody.length === 0 || rawBody.length > 512 * 1024) {
+    return response.status(400).json({ error: 'Ungültige Anfrage.' })
+  }
+  if (!verifyPaywiseWebhookSignature(rawBody, request.get('x-paywise-signature'), paywiseWebhookSecret.value())) {
+    return response.status(401).json({ error: 'Signatur ungültig.' })
+  }
+  let payload
+  try {
+    payload = JSON.parse(rawBody.toString('utf8'))
+  } catch {
+    return response.status(400).json({ error: 'Ungültiges JSON.' })
+  }
+  const event = String(payload?.event || request.get('x-paywise-event') || '').slice(0, 120)
+  const deliveryId = String(payload?.event_id || request.get('x-paywise-delivery-id') || crypto.randomUUID()).slice(0, 120)
+  const eventRef = db.collection('paywiseWebhookEvents').doc(crypto.createHash('sha256').update(deliveryId).digest('hex'))
+  try {
+    const ids = [...collectPaywiseIds(payload?.data)]
+    const matches = new Map()
+    if (ids.length) {
+      for (const field of ['orderId', 'claimId', 'debtorId']) {
+        for (let index = 0; index < ids.length; index += 10) {
+          const snapshot = await db.collection('paywiseInkassoSubmissions').where(field, 'in', ids.slice(index, index + 10)).limit(20).get()
+          snapshot.docs.forEach((document) => matches.set(document.id, document.ref))
+        }
+      }
+    }
+    const created = await db.runTransaction(async (transaction) => {
+      const existing = await transaction.get(eventRef)
+      if (existing.exists) return false
+      transaction.create(eventRef, {
+        event,
+        deliveryId,
+        environment: String(payload?.environment || request.get('x-paywise-environment') || '').slice(0, 40),
+        eventTimestamp: String(payload?.timestamp || '').slice(0, 60),
+        data: JSON.parse(JSON.stringify(payload?.data ?? null)),
+        submissionIds: [...matches.keys()],
+        receivedAt: admin.firestore.FieldValue.serverTimestamp(),
+      })
+      for (const ref of matches.values()) {
+        transaction.set(ref, {
+          lastWebhookEvent: event,
+          lastWebhookAt: admin.firestore.FieldValue.serverTimestamp(),
+          webhookEvents: admin.firestore.FieldValue.arrayUnion({ event, deliveryId, timestamp: String(payload?.timestamp || '').slice(0, 60) }),
+        }, { merge: true })
+      }
+      return true
+    })
+    return response.json({ received: true, duplicate: !created })
+  } catch (error) {
+    console.error('Paywise-Webhook fehlgeschlagen:', error.message)
+    return response.status(500).json({ error: 'Webhook konnte nicht verarbeitet werden.' })
+  }
+})
+
 const getAdminLoginRateLimitRef = (request, username) => {
   const key = crypto.createHash('sha256').update(`${getClientRateLimitId(request)}:${username.toLowerCase()}`).digest('hex')
   return db.collection('publicShopAdminRateLimits').doc(key)
@@ -3795,7 +5067,7 @@ exports.submitPublicOrder = onRequest({
   region,
   cors: false,
   maxInstances: 10,
-  timeoutSeconds: 20,
+  timeoutSeconds: 60,
   secrets: [orderAdminToken],
 }, async (request, response) => {
   setCors(request, response)
@@ -3843,9 +5115,11 @@ exports.submitPublicOrder = onRequest({
       ? applyBusinessPricing(shop.products, businessPrices)
       : shop.products
     const catalog = new Map(pricedProducts.map((product) => [product.id, product]))
+    const [stripeStatus, paypalStatus] = await Promise.all([getStripeStatus(), getPaypalStatus()])
     const availablePaymentMethods = [
       ...(shop.payment.accountHolder && shop.payment.iban ? ['vorkasse'] : []),
-      ...((await getStripeStatus()).enabled ? ['stripe'] : []),
+      ...(stripeStatus.enabled ? ['stripe'] : []),
+      ...(paypalStatus.enabled ? ['paypal'] : []),
     ]
     let orderInput = request.body
     let businessTrayItems = []
@@ -3884,13 +5158,14 @@ exports.submitPublicOrder = onRequest({
       : calculateDiscount(request.body?.discountCode, await readShopDiscountCodes(), order.totalPriceCents)
     const pricedOrder = calculateOrderPricing(order, catalog, shop.settings, discount, { businessCustomer: businessApproved })
     const isStripe = pricedOrder.paymentMethod === 'stripe'
-    if (isStripe && getCheckoutAmountCents(pricedOrder, pricedOrder.shippingPriceCents) < 50) {
+    const isPaypal = pricedOrder.paymentMethod === 'paypal'
+    if ((isStripe || isPaypal) && getCheckoutAmountCents(pricedOrder, pricedOrder.shippingPriceCents) < 50) {
       return response.status(400).json({
-        error: 'Stripe akzeptiert Zahlungen erst ab 0,50 €. Bitte den Rabattcode prüfen, mehr Artikel in den Warenkorb legen oder Vorkasse wählen.',
+        error: 'Online-Zahlungen sind erst ab 0,50 € möglich. Bitte den Rabattcode prüfen, mehr Artikel in den Warenkorb legen oder Vorkasse wählen.',
       })
     }
     await enforceRateLimit(request)
-    const completed = await completePublicOrder({ order: pricedOrder, shop, paymentStatus: 'pending', skipEmail: isStripe })
+    const completed = await completePublicOrder({ order: pricedOrder, shop, paymentStatus: 'pending', skipEmail: isStripe || isPaypal })
     if (isStripe) {
       try {
         const stripe = await getStripeConfig()
@@ -3923,6 +5198,50 @@ exports.submitPublicOrder = onRequest({
           }).catch(() => {}),
         ])
         return response.status(502).json({ error: 'Die Online-Zahlung ist gerade nicht verfügbar. Bitte Vorkasse wählen oder später erneut versuchen.' })
+      }
+    }
+    if (isPaypal) {
+      try {
+        const paypal = await getPaypalConfig()
+        if (!paypal?.enabled) throw new Error('PayPal ist nicht eingerichtet.')
+        const amountCents = getCheckoutAmountCents(pricedOrder, completed.shippingPriceCents)
+        const paypalOrder = await requestPaypalApi(paypal, '/v2/checkout/orders', {
+          method: 'POST',
+          requestId: `${completed.orderId}-create`,
+          body: buildPaypalOrderRequest({
+            orderNumber: completed.orderNumber,
+            orderId: completed.orderId,
+            amountCents,
+            returnUrl: 'https://xn--zyro-getrnke-ocb.de/brand.html?paypal=approved',
+            cancelUrl: 'https://xn--zyro-getrnke-ocb.de/brand.html?paypal=cancelled',
+          }),
+        })
+        if (!/^[A-Za-z0-9-]{10,64}$/.test(String(paypalOrder.id || ''))) {
+          throw new Error('PayPal hat eine ungültige Bestellnummer zurückgegeben.')
+        }
+        await Promise.all([
+          db.collection('publicOrders').doc(completed.orderId).update({
+            paypalOrderId: paypalOrder.id,
+            paypalAmountCents: amountCents,
+          }),
+          db.collection('customerPortalOrders').doc(completed.orderId).update({
+            paypalOrderId: paypalOrder.id,
+            paypalAmountCents: amountCents,
+          }),
+        ])
+        return response.status(201).json({ accepted: true, orderNumber: completed.orderNumber, paypalOrderId: paypalOrder.id })
+      } catch (paypalError) {
+        console.error('PayPal-Checkout fehlgeschlagen:', paypalError.message)
+        await Promise.all([
+          db.collection('publicOrders').doc(completed.orderId).delete(),
+          db.collection('customerPortalOrders').doc(completed.orderId).delete(),
+          runMdeCloudUpdate(['zyro-sales-documents'], (data) => {
+            const list = data['zyro-sales-documents']
+            const position = list.findIndex((entry) => entry.websiteOrderId === completed.orderId)
+            if (position >= 0) list.splice(position, 1)
+          }).catch(() => {}),
+        ])
+        return response.status(502).json({ error: 'PayPal ist gerade nicht verfügbar. Bitte Vorkasse wählen oder später erneut versuchen.' })
       }
     }
     return response.status(201).json({
@@ -4107,9 +5426,10 @@ exports.getPublicShop = onRequest({
       const discount = calculateDiscount(discountCode, await readShopDiscountCodes(), subtotalCents)
       return response.json({ discount })
     }
-    const [shop, stripeStatus, statsSnapshot, reviewsSnapshot] = await Promise.all([
+    const [shop, stripeStatus, paypalConfig, statsSnapshot, reviewsSnapshot] = await Promise.all([
       readShopConfig(),
       getStripeStatus(),
+      getPaypalConfig(),
       db.collection('publicProductReviewStats').get(),
       db.collection('publicProductReviews').where('status', '==', 'approved').limit(200).get(),
     ])
@@ -4154,9 +5474,9 @@ exports.getPublicShop = onRequest({
       paymentMethods: [
         ...(shop.payment.accountHolder && shop.payment.iban ? ['vorkasse'] : []),
         ...(stripeStatus.enabled ? ['stripe'] : []),
-        ...(shop.payment.paypalClientId ? ['paypal'] : []),
+        ...(paypalConfig?.enabled ? ['paypal'] : []),
       ],
-      paypalClientId: shop.payment.paypalClientId,
+      paypalClientId: paypalConfig?.enabled ? paypalConfig.clientId : '',
     })
   } catch (error) {
     if (discountCode) return response.status(400).json({ error: error.message || 'Rabattcode konnte nicht geprüft werden.' })
@@ -4173,6 +5493,20 @@ exports.customerProductReview = onRequest({
   setCors(request, response)
   response.set('Cache-Control', 'no-store')
   if (request.method === 'OPTIONS') return response.status(204).send('')
+  if (request.method === 'GET' && request.query?.optout) {
+    const page = (title, text) => `<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${title} · ZYRO</title><link rel="stylesheet" href="/fonts/fonts.css?v=1"></head><body style="margin:0;background:#f5f0e8;font:16px/1.6 Inter,Arial,sans-serif;color:#241910"><main style="max-width:520px;margin:12vh auto;padding:32px;background:#fff;border-radius:20px"><p style="font-weight:800;letter-spacing:3px">ZYRO</p><h1 style="font-size:28px;margin:0 0 12px">${title}</h1><p>${text}</p><p><a href="/" style="color:#754a2d">Zur Website</a></p></main></body></html>`
+    const token = String(request.query.optout)
+    if (!/^[a-f0-9]{48}$/.test(token)) return response.status(400).type('html').send(page('Link ungültig', 'Dieser Abmeldelink ist ungültig. Schreib uns einfach an info@zyro-getränke.de.'))
+    try {
+      const tokenSnapshot = await db.collection('reviewOptOutTokens').doc(hashReviewToken(token)).get()
+      if (!tokenSnapshot.exists) return response.status(404).type('html').send(page('Link ungültig', 'Dieser Abmeldelink ist ungültig oder wurde schon verwendet. Schreib uns einfach an info@zyro-getränke.de.'))
+      await db.collection('reviewOptOuts').doc(tokenSnapshot.data().emailKey).set({ optedOutAt: admin.firestore.FieldValue.serverTimestamp() })
+      return response.type('html').send(page('Abgemeldet', 'Du bekommst von uns keine Bewertungsanfragen mehr. Deine Bestellungen sind davon nicht betroffen.'))
+    } catch (error) {
+      console.error('Abmeldung von Bewertungsanfragen fehlgeschlagen:', error.message)
+      return response.status(503).type('html').send(page('Gerade nicht möglich', 'Bitte versuche es später erneut oder schreib uns an info@zyro-getränke.de.'))
+    }
+  }
   if (request.method !== 'POST') return sendMethodError(response)
   const origin = String(request.get('origin') || '')
   if (origin && !allowedOrigins.has(origin)) return response.status(403).json({ error: 'Bewertungsanfrage nicht zulässig.' })
@@ -4309,7 +5643,8 @@ exports.manageBrandMail = onRequest({
 
   if (request.method === 'GET') {
     try {
-      return response.json({ mail: await getMailSettings(), stripe: await getStripeStatus() })
+      const [mail, stripe, paypal] = await Promise.all([getMailSettings(), getStripeStatus(), getPaypalStatus()])
+      return response.json({ mail, stripe, paypal })
     } catch (error) {
       console.error('SMTP-Einstellungen konnten nicht geladen werden:', error.message)
       return response.status(500).json({ error: 'SMTP-Einstellungen konnten nicht geladen werden.' })
@@ -4321,6 +5656,14 @@ exports.manageBrandMail = onRequest({
       return response.json({ success: true, stripe: await saveStripeConfig(request.body) })
     } catch (error) {
       return response.status(400).json({ error: error.message || 'Stripe-Daten konnten nicht gespeichert werden.' })
+    }
+  }
+
+  if (request.body?.action === 'savePaypal') {
+    try {
+      return response.json({ success: true, paypal: await savePaypalConfig(request.body) })
+    } catch (error) {
+      return response.status(400).json({ error: error.message || 'PayPal-Daten konnten nicht gespeichert werden.' })
     }
   }
 
@@ -4470,7 +5813,7 @@ exports.stripeWebhook = onRequest({
     if (order.paymentStatus === 'paid' && !order.confirmationEmailStatus) return response.json({ received: true })
     if (order.paymentStatus !== 'paid') {
       await Promise.all([
-        orderRef.update({ paymentStatus: 'paid', stripeSessionId: String(session.id || '') }),
+        orderRef.update({ paymentStatus: 'paid', paidAt: admin.firestore.FieldValue.serverTimestamp(), stripeSessionId: String(session.id || '') }),
         db.collection('customerPortalOrders').doc(orderId).update({ paymentStatus: 'paid', customerStatus: 'Zahlung erhalten' }),
       ])
       await syncOrderToDesktop(orderId, order, 'paid')
@@ -4506,6 +5849,198 @@ exports.stripeWebhook = onRequest({
   } catch (error) {
     console.error('Stripe-Webhook Fehler:', error.message)
     return response.status(500).json({ error: 'Webhook-Fehler.' })
+  }
+})
+
+const finalizePaypalPayment = async (paypal, orderId, paypalOrder) => {
+  const orderRef = db.collection('publicOrders').doc(orderId)
+  const snapshot = await orderRef.get()
+  if (!snapshot.exists) throw new Error('Bestellung wurde nicht gefunden.')
+  const order = snapshot.data()
+  if (order.paymentMethod !== 'paypal' || order.paypalOrderId !== paypalOrder.id) {
+    throw new Error('PayPal-Bestellung stimmt nicht mit dem Shop überein.')
+  }
+  const { captureId } = validateCompletedPaypalOrder(paypalOrder, {
+    orderId,
+    amountCents: Number(order.paypalAmountCents),
+  })
+
+  let newlyPaid = false
+  await db.runTransaction(async (transaction) => {
+    newlyPaid = false
+    const currentSnapshot = await transaction.get(orderRef)
+    if (!currentSnapshot.exists) throw new Error('Bestellung wurde nicht gefunden.')
+    const currentOrder = currentSnapshot.data()
+    if (currentOrder.paymentMethod !== 'paypal'
+      || currentOrder.paypalOrderId !== order.paypalOrderId
+      || Number(currentOrder.paypalAmountCents) !== Number(order.paypalAmountCents)) {
+      throw new Error('PayPal-Bestellung stimmt nicht mit dem Shop überein.')
+    }
+    if (currentOrder.paymentStatus === 'paid') return
+    if (currentOrder.paymentStatus !== 'pending') throw new Error('Diese Bestellung kann nicht mehr bezahlt werden.')
+    const paidUpdate = {
+      paymentStatus: 'paid',
+      customerStatus: 'Zahlung erhalten',
+      paypalCaptureId: captureId,
+      paidAt: admin.firestore.FieldValue.serverTimestamp(),
+    }
+    transaction.update(orderRef, paidUpdate)
+    transaction.set(db.collection('customerPortalOrders').doc(orderId), paidUpdate, { merge: true })
+    newlyPaid = true
+  })
+  if (newlyPaid) await syncOrderToDesktop(orderId, order, 'paid')
+
+  let shouldSendEmail = false
+  await db.runTransaction(async (transaction) => {
+    shouldSendEmail = false
+    const currentSnapshot = await transaction.get(orderRef)
+    if (!currentSnapshot.exists) throw new Error('Bestellung wurde nicht gefunden.')
+    const currentOrder = currentSnapshot.data()
+    if (currentOrder.confirmationEmailStatus === 'sent') return
+    const sendingAt = currentOrder.confirmationEmailStartedAt?.toMillis?.() || 0
+    if (currentOrder.confirmationEmailStatus === 'sending' && Date.now() - sendingAt < 5 * 60 * 1000) return
+    const emailAttempt = {
+      confirmationEmailStatus: 'sending',
+      confirmationEmailStartedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }
+    transaction.set(orderRef, emailAttempt, { merge: true })
+    transaction.set(db.collection('customerPortalOrders').doc(orderId), emailAttempt, { merge: true })
+    shouldSendEmail = true
+  })
+  if (!shouldSendEmail) return { orderNumber: order.orderNumber, confirmationEmailSent: order.confirmationEmailStatus === 'sent' }
+
+  try {
+    const shop = await readShopConfig()
+    const paymentInfo = { accountHolder: shop.payment.accountHolder, iban: shop.payment.iban, reference: order.orderNumber }
+    const mail = buildOrderConfirmationEmail({
+      order: { ...order, paymentStatus: 'paid' },
+      orderNumber: order.orderNumber,
+      paymentInfo,
+    })
+    await sendShopEmail({ to: order.email, subject: `Bestellbestätigung ${order.orderNumber} · ZYRO`, ...mail })
+    const emailStatus = {
+      confirmationEmailStatus: 'sent',
+      confirmationEmailSentAt: admin.firestore.FieldValue.serverTimestamp(),
+      confirmationEmailError: '',
+      confirmationEmailAttempts: Number(order.confirmationEmailAttempts || 0) + 1,
+    }
+    await Promise.all([
+      orderRef.set(emailStatus, { merge: true }),
+      db.collection('customerPortalOrders').doc(orderId).set(emailStatus, { merge: true }),
+    ])
+    return { orderNumber: order.orderNumber, confirmationEmailSent: true }
+  } catch (error) {
+    console.error('PayPal-Bestellbestätigung konnte nicht versendet werden:', error.message)
+    const emailStatus = {
+      confirmationEmailStatus: 'failed',
+      confirmationEmailError: 'Bestätigung nach Zahlung konnte nicht gesendet werden.',
+      confirmationEmailAttempts: Number(order.confirmationEmailAttempts || 0) + 1,
+    }
+    await Promise.all([
+      orderRef.set(emailStatus, { merge: true }),
+      db.collection('customerPortalOrders').doc(orderId).set(emailStatus, { merge: true }),
+    ])
+    return { orderNumber: order.orderNumber, confirmationEmailSent: false }
+  }
+}
+
+exports.capturePaypalOrder = onRequest({
+  region,
+  cors: false,
+  maxInstances: 10,
+  timeoutSeconds: 90,
+  secrets: [orderAdminToken],
+}, async (request, response) => {
+  setCors(request, response)
+  if (request.method === 'OPTIONS') return response.status(204).send('')
+  if (request.method !== 'POST') return sendMethodError(response)
+  try {
+    const paypalOrderId = String(request.body?.paypalOrderId || '')
+    if (!/^[A-Za-z0-9-]{10,64}$/.test(paypalOrderId)) {
+      return response.status(400).json({ error: 'PayPal-Bestellnummer ungültig.' })
+    }
+    await enforceRateLimit(request)
+    const orderSnapshot = await db.collection('publicOrders')
+      .where('paypalOrderId', '==', paypalOrderId)
+      .limit(1)
+      .get()
+    if (orderSnapshot.empty) return response.status(404).json({ error: 'PayPal-Bestellung wurde nicht gefunden.' })
+    const orderId = orderSnapshot.docs[0].id
+    const order = orderSnapshot.docs[0].data()
+    if (order.paymentMethod !== 'paypal' || !Number.isSafeInteger(order.paypalAmountCents)) {
+      return response.status(409).json({ error: 'PayPal-Bestellung kann nicht bestätigt werden.' })
+    }
+    const paypal = await getPaypalConfig()
+    if (!paypal) return response.status(503).json({ error: 'PayPal ist momentan nicht verfügbar.' })
+
+    let paypalOrder = await requestPaypalApi(paypal, `/v2/checkout/orders/${encodeURIComponent(paypalOrderId)}`)
+    if (paypalOrder.status === 'APPROVED') {
+      try {
+        paypalOrder = await requestPaypalApi(paypal, `/v2/checkout/orders/${encodeURIComponent(paypalOrderId)}/capture`, {
+          method: 'POST',
+          requestId: `${orderId}-capture`,
+          body: {},
+        })
+      } catch (captureError) {
+        paypalOrder = await requestPaypalApi(paypal, `/v2/checkout/orders/${encodeURIComponent(paypalOrderId)}`)
+        if (paypalOrder.status !== 'COMPLETED') throw captureError
+      }
+    }
+    const result = await finalizePaypalPayment(paypal, orderId, paypalOrder)
+    return response.json({ captured: true, orderNumber: result.orderNumber, confirmationEmailSent: result.confirmationEmailSent })
+  } catch (error) {
+    if (error.status === 404) return response.status(404).json({ error: 'PayPal-Bestellung wurde nicht gefunden.' })
+    if (error.status === 409) return response.status(409).json({ error: 'PayPal-Zahlung konnte nicht abgeschlossen werden. Bitte erneut versuchen.' })
+    if (/PayPal-Zahlung ist noch nicht abgeschlossen/.test(error.message)) {
+      return response.status(409).json({ error: 'PayPal-Zahlung ist noch nicht abgeschlossen. Bitte erneut versuchen.' })
+    }
+    console.error('PayPal-Zahlungsbestätigung fehlgeschlagen:', error.message)
+    return response.status(502).json({ error: 'PayPal-Zahlung konnte nicht bestätigt werden. Bitte erneut versuchen oder den Support kontaktieren.' })
+  }
+})
+
+exports.paypalWebhook = onRequest({
+  region,
+  cors: false,
+  maxInstances: 5,
+  timeoutSeconds: 90,
+  secrets: [orderAdminToken],
+}, async (request, response) => {
+  if (request.method !== 'POST') return sendMethodError(response)
+  try {
+    const paypal = await getPaypalConfig()
+    if (!paypal?.webhookId) return response.status(400).json({ error: 'PayPal-Webhook ist nicht eingerichtet.' })
+    const verification = await requestPaypalApi(paypal, '/v1/notifications/verify-webhook-signature', {
+      method: 'POST',
+      body: {
+        auth_algo: request.get('paypal-auth-algo'),
+        cert_url: request.get('paypal-cert-url'),
+        transmission_id: request.get('paypal-transmission-id'),
+        transmission_sig: request.get('paypal-transmission-sig'),
+        transmission_time: request.get('paypal-transmission-time'),
+        webhook_id: paypal.webhookId,
+        webhook_event: request.body,
+      },
+    })
+    if (verification.verification_status !== 'SUCCESS') {
+      return response.status(400).json({ error: 'Ungültige PayPal-Webhook-Signatur.' })
+    }
+    if (request.body?.event_type !== 'PAYMENT.CAPTURE.COMPLETED') return response.json({ received: true })
+    const paypalOrderId = String(request.body?.resource?.supplementary_data?.related_ids?.order_id || '')
+    if (!/^[A-Za-z0-9-]{10,64}$/.test(paypalOrderId)) return response.json({ received: true })
+    const orderSnapshot = await db.collection('publicOrders')
+      .where('paypalOrderId', '==', paypalOrderId)
+      .limit(1)
+      .get()
+    if (orderSnapshot.empty) return response.json({ received: true })
+    const orderId = orderSnapshot.docs[0].id
+    const paypalOrder = await requestPaypalApi(paypal, `/v2/checkout/orders/${encodeURIComponent(paypalOrderId)}`)
+    const result = await finalizePaypalPayment(paypal, orderId, paypalOrder)
+    if (!result.confirmationEmailSent) return response.status(500).json({ error: 'Bestellbestätigung konnte nicht gesendet werden.' })
+    return response.json({ received: true })
+  } catch (error) {
+    console.error('PayPal-Webhook fehlgeschlagen:', error.message)
+    return response.status(500).json({ error: 'PayPal-Webhook konnte nicht verarbeitet werden.' })
   }
 })
 

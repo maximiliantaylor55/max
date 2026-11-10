@@ -3,7 +3,7 @@ const path = require('node:path')
 const zlib = require('node:zlib')
 
 const cloudEndpoint = 'https://europe-west3-zyro-78855.cloudfunctions.net/cloudData'
-const pollIntervalMs = 10 * 1000
+const pollIntervalMs = 20 * 1000 // Lokale Änderungen werden sofort gepusht; fremde Änderungen alle 20 s abrufen
 const pushDelayMs = 3 * 1000
 const cloudRetryDelaysMs = [500, 1500, 4000]
 

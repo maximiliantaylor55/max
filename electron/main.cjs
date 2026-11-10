@@ -87,6 +87,8 @@ const sharedDataKeys = new Set([
   'zyro-bottler-details',
   'zyro-website-orders',
   'zyro-customers',
+  'zyro-customer-letters',
+  'zyro-qm-documents',
   'zyro-inventory',
   'zyro-stock-movements',
   'zyro-reports',
@@ -1641,7 +1643,7 @@ ipcMain.handle('zyro-data:set', async (event, key, value, sessionToken) => {
         throw new Error('Nur ein Admin am Haupt-PC darf Ticketstatus oder Freigaben ändern.')
       }
     }
-    if (['zyro-products', 'zyro-recipes', 'zyro-orders', 'zyro-sales-documents', 'zyro-finance-entries', 'zyro-website-orders', 'zyro-customers', 'zyro-inventory', 'zyro-stock-movements', 'zyro-archive-documents', 'zyro-delete-requests'].includes(key)
+    if (['zyro-products', 'zyro-recipes', 'zyro-orders', 'zyro-sales-documents', 'zyro-finance-entries', 'zyro-website-orders', 'zyro-customers', 'zyro-inventory', 'zyro-stock-movements', 'zyro-archive-documents', 'zyro-qm-documents', 'zyro-delete-requests'].includes(key)
       && hasRemovedRecords(key, storedValue, value)) {
       const userId = authSessions.get(String(sessionToken || ''))
       const requester = readAuthUsers().find((user) => String(user.id) === userId)
@@ -2378,6 +2380,59 @@ ipcMain.handle('zyro-web-orders:inquiry-settings', async (event, notifyEmail, se
   return notifyEmail ? requestWebsiteOrders(url, token, 'POST', { notifyEmail }) : requestWebsiteOrders(url, token)
 })
 
+// Newsletter: Abonnenten, Bilder, Testmail und Versand laufen über die Cloud Function newsletterAdmin.
+ipcMain.handle('zyro-newsletter:request', async (event, action, payload, sessionToken) => {
+  const user = getWebsiteOrderUser(event, sessionToken).user
+  if (user.role !== 'admin') throw new Error('Der Newsletter ist nur für Admins.')
+  if (!['overview', 'delete-subscriber', 'upload-image', 'test', 'start', 'continue'].includes(String(action))) throw new Error('Newsletter-Aktion ungültig.')
+  const token = await readWebsiteOrderToken()
+  if (!token) throw new Error('Website-Admin-Token fehlt. Bitte unter Admin → Website einrichten.')
+  const response = await fetch('https://europe-west3-zyro-78855.cloudfunctions.net/newsletterAdmin', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ action, payload: payload || {} }),
+    signal: AbortSignal.timeout(290000),
+  })
+  const result = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(result.error || `Newsletter-Anfrage fehlgeschlagen (${response.status}).`)
+  return result
+})
+
+// Geschäftsereignisse (Bestellung, Zahlung, Kontakt, Widerruf, Paywise) für Windows-Benachrichtigungen.
+ipcMain.handle('zyro-events:list', async (event, since, sessionToken) => {
+  const user = getWebsiteOrderUser(event, sessionToken).user
+  if (user.role !== 'admin') return { events: [], serverTime: Date.now() }
+  const token = await readWebsiteOrderToken()
+  if (!token) return { events: [], serverTime: Date.now(), error: 'Website-Admin-Token fehlt.' }
+  const url = `https://europe-west3-zyro-78855.cloudfunctions.net/businessEvents?since=${encodeURIComponent(Number(since) || 0)}`
+  const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(20000) })
+  const result = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(result.error || `Ereignisse konnten nicht geladen werden (${response.status}).`)
+  return result
+})
+
+ipcMain.handle('zyro-paywise:request', async (event, action, payload, sessionToken) => {
+  const user = getWebsiteOrderUser(event, sessionToken).user
+  if (user.role !== 'admin') throw new Error('Inkassoaufträge dürfen nur von einem Admin übergeben werden.')
+  if (!['status', 'submit', 'mahnservice-get', 'mahnservice-submit', 'mahnservice-payment'].includes(action)) throw new Error('Paywise-Aktion ungültig.')
+  const token = await readWebsiteOrderToken()
+  if (!token) throw new Error('Für Paywise am Desktop bitte zuerst unter Admin das Website-Admin-Token einrichten.')
+  const body = {
+    ...(payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {}),
+    action,
+    desktopActor: { id: String(user.id), name: String(user.name || '').slice(0, 100) },
+  }
+  const response = await fetch('https://europe-west3-zyro-78855.cloudfunctions.net/paywiseInkasso', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(120000),
+  })
+  const result = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(result.error || `Paywise-Anfrage fehlgeschlagen (${response.status}).`)
+  return result
+})
+
 ipcMain.handle('zyro-web-orders:list-business-customers', async (event, sessionToken) => {
   assertWebsiteOrderAdmin(event, sessionToken)
   const token = await readWebsiteOrderToken()
@@ -3083,7 +3138,7 @@ const createWindow = async () => {
     minWidth: 980,
     minHeight: 700,
     autoHideMenuBar: true,
-    backgroundColor: '#071623',
+    backgroundColor: '#f5f0e8',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -3318,6 +3373,9 @@ ipcMain.handle('zyro-updater:open-macos-downloads', async (event) => {
   await shell.openExternal('https://zyro-78855.web.app/desktop-updates/macos.html')
   return { opened: true }
 })
+
+// Windows zeigt Benachrichtigungen nur mit gesetzter App-ID an.
+if (process.platform === 'win32') app.setAppUserModelId('com.libertystreetfood.zyro')
 
 app.whenReady().then(async () => {
   session.defaultSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin) => (

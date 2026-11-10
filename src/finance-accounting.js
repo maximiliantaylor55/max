@@ -5,6 +5,51 @@ const amountParts = (grossCents, vatRate) => {
 
 const isInMonth = (date, month) => typeof date === 'string' && date.startsWith(`${month}-`)
 
+export const calculateIssuedInvoiceOverview = (documents, month) => {
+  const invoices = (Array.isArray(documents) ? documents : [])
+    .filter((document) => (
+      document?.kind === 'rechnung'
+      && ['Ausgestellt', 'Versendet', 'Bezahlt', 'Überfällig'].includes(document.status)
+      && isInMonth(document.documentDate, month)
+    ))
+    .map((document) => {
+      const vatRate = Number(document.vatRate)
+      const items = Array.isArray(document.items) && document.items.length > 0
+        ? document.items
+        : [{ quantity: document.quantity ?? 1, unitPrice: document.unitPrice ?? 0 }]
+      const validItems = items.every((item) => {
+        const quantity = Number(item?.quantity)
+        const unitPriceCents = Math.round(Number(item?.unitPrice) * 100)
+        return Number.isFinite(quantity) && quantity > 0
+          && Number.isSafeInteger(unitPriceCents) && unitPriceCents >= 0
+      })
+      const netCents = validItems
+        ? items.reduce((sum, item) => sum + Math.round(Number(item.quantity) * Math.round(Number(item.unitPrice) * 100)), 0)
+        : NaN
+      const amountsValid = [0, 7, 19].includes(vatRate)
+        && Number.isSafeInteger(netCents) && netCents > 0
+        && Number.isSafeInteger(Math.round(netCents * (1 + vatRate / 100)))
+
+      return {
+        id: String(document.id),
+        number: String(document.number || ''),
+        recipient: String(document.recipient || ''),
+        documentDate: document.documentDate,
+        status: document.status,
+        netCents: amountsValid ? netCents : null,
+        grossCents: amountsValid ? Math.round(netCents * (1 + vatRate / 100)) : null,
+      }
+    })
+  const validInvoices = invoices.filter((invoice) => invoice.netCents !== null)
+
+  return {
+    invoices,
+    invalidCount: invoices.length - validInvoices.length,
+    netCents: validInvoices.reduce((sum, invoice) => sum + invoice.netCents, 0),
+    grossCents: validInvoices.reduce((sum, invoice) => sum + invoice.grossCents, 0),
+  }
+}
+
 export const calculateFinanceReport = (entries, month) => {
   const validEntries = (Array.isArray(entries) ? entries : []).filter((entry) => (
     entry && Number.isSafeInteger(entry.grossCents) && entry.grossCents > 0

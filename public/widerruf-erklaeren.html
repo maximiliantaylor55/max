@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#21170f" />
+    <title>Vertrag widerrufen · ZYRO</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="stylesheet" href="/fonts/fonts.css?v=1" />
+    <link rel="stylesheet" href="/legal.css?v=4" />
+    <style>
+      .wd-form { display: grid; gap: 16px; margin-top: 8px; }
+      .wd-form label { display: grid; gap: 6px; font-size: 0.9rem; font-weight: 600; }
+      .wd-form input, .wd-form textarea { font: inherit; font-weight: 400; padding: 12px 14px; border: 1px solid rgba(48,34,22,.3); border-radius: 10px; background: #fffdf9; color: #241910; }
+      .wd-form small { font-weight: 400; color: #726559; }
+      .wd-button { justify-self: start; font: inherit; font-weight: 700; padding: 14px 26px; border: 0; border-radius: 999px; background: #241910; color: #f5f0e8; cursor: pointer; }
+      .wd-button.secondary { background: transparent; color: #241910; border: 1px solid rgba(48,34,22,.4); }
+      .wd-button:disabled { opacity: .6; cursor: wait; }
+      .wd-summary { white-space: pre-wrap; padding: 16px 18px; border-radius: 10px; background: #fffdf9; border: 1px solid rgba(48,34,22,.16); }
+      .wd-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+      .wd-error { color: #a12a1a; font-weight: 600; }
+      .trap { position: absolute; left: -10000px; }
+      .wd-success { display: flex; gap: 16px; align-items: flex-start; padding: 22px 24px; margin-bottom: 20px; border-radius: 16px; background: #eef7f0; border: 1px solid rgba(47,125,79,.35); }
+      .wd-success-icon { flex: none; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: #2f7d4f; color: #fff; font-size: 24px; font-weight: 700; }
+      .wd-success h2 { margin: 0 0 4px; color: #1f5a37; font-size: 1.35rem; }
+      .wd-success p { margin: 0; }
+      #step-3 { border-top: 0; }
+    </style>
+  </head>
+  <body>
+    <header class="legal-header">
+      <a class="legal-brand" href="/">ZYRO<span>®</span></a>
+      <a class="legal-back" href="/">Zur Website <span aria-hidden="true">↗</span></a>
+    </header>
+    <main class="legal-main">
+      <p class="legal-eyebrow">ZYRO · Widerruf</p>
+      <h1>Vertrag widerrufen</h1>
+
+      <section id="step-1">
+        <p>Du kannst deine Bestellung innerhalb von 14 Tagen nach Erhalt der Ware ohne Angabe von Gründen widerrufen. Gib dazu deine Angaben ein. Im nächsten Schritt bestätigst du den Widerruf. Danach bekommst du sofort eine Eingangsbestätigung per E-Mail. Einzelheiten stehen in der <a href="/widerruf.html">Widerrufsbelehrung</a>.</p>
+        <form id="wd-form" class="wd-form" method="post" action="/widerruf.html" novalidate>
+          <input name="website" class="trap" tabindex="-1" autocomplete="off" aria-hidden="true" />
+          <label>Name<input name="name" required maxlength="100" autocomplete="name" /></label>
+          <label>E-Mail für die Eingangsbestätigung<input name="email" type="email" required maxlength="254" autocomplete="email" /></label>
+          <label>Bestellnummer oder Bestelldatum<input name="order" required maxlength="200" placeholder="z. B. Bestellung vom 08.11.2026 oder Bestellnummer" /></label>
+          <label>Welche Artikel? <small>(leer lassen = gesamte Bestellung)</small><textarea name="items" rows="3" maxlength="1000"></textarea></label>
+          <p id="wd-error-1" class="wd-error" role="alert" hidden></p>
+          <button type="submit" class="wd-button">Weiter</button>
+        </form>
+      </section>
+
+      <section id="step-2" hidden>
+        <h2>Bitte prüfen und bestätigen</h2>
+        <p>Diese Erklärung wird an uns übermittelt:</p>
+        <div id="wd-preview" class="wd-summary"></div>
+        <p>Eingangsbestätigung an: <strong id="wd-preview-email"></strong></p>
+        <p id="wd-error-2" class="wd-error" role="alert" hidden></p>
+        <div class="wd-actions">
+          <button type="button" id="wd-confirm" class="wd-button">Widerruf bestätigen</button>
+          <button type="button" id="wd-back" class="wd-button secondary">Angaben ändern</button>
+        </div>
+      </section>
+
+      <section id="step-3" hidden tabindex="-1">
+        <div class="wd-success" role="status">
+          <span class="wd-success-icon" aria-hidden="true">✓</span>
+          <div>
+            <h2>Widerruf erfolgreich übermittelt</h2>
+            <p>Vielen Dank. Wir haben deinen Widerruf erhalten und melden uns bei dir.</p>
+          </div>
+        </div>
+        <p><strong>Eingang:</strong> <span id="wd-time"></span> Uhr<br /><strong>Vorgangsnummer:</strong> <span id="wd-ref"></span></p>
+        <div id="wd-final" class="wd-summary"></div>
+        <p id="wd-mail-note"></p>
+        <p>Bitte sende die Ware innerhalb von 14 Tagen an: Liberty Street Food GmbH, Birlenbacherstr. 59, 57078 Siegen.</p>
+      </section>
+    </main>
+    <footer class="legal-footer"><a href="/impressum.html">Impressum</a> · <a href="/datenschutz.html">Datenschutz</a> · <a href="/agb.html">AGB</a> · <a href="/widerruf.html">Widerruf</a> · <a href="/?cookie-einstellungen">Cookie-Einstellungen</a><span>© 2026 Liberty Street Food GmbH</span></footer>
+    <script src="/widerruf-erklaeren.js?v=1"></script>
+  </body>
+</html>

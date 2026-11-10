@@ -68,6 +68,23 @@ contextBridge.exposeInMainWorld('zyroData', {
   closeHtmlPreview: (previewId) => ipcRenderer.invoke('zyro-data:close-html-preview', previewId),
 })
 
+// Paywise-Inkasso: läuft über die Cloud Function mit dem Website-Admin-Token des Haupt-PCs.
+contextBridge.exposeInMainWorld('zyroNewsletter', {
+  request: (action, payload, sessionToken) => ipcRenderer.invoke('zyro-newsletter:request', action, payload, sessionToken),
+})
+
+contextBridge.exposeInMainWorld('zyroEvents', {
+  list: (since, sessionToken) => ipcRenderer.invoke('zyro-events:list', since, sessionToken),
+})
+
+contextBridge.exposeInMainWorld('zyroPaywise', {
+  status: (sessionToken) => ipcRenderer.invoke('zyro-paywise:request', 'status', {}, sessionToken),
+  submit: (submission, sessionToken) => ipcRenderer.invoke('zyro-paywise:request', 'submit', submission, sessionToken),
+  mahnserviceGet: (invoiceId, sessionToken) => ipcRenderer.invoke('zyro-paywise:request', 'mahnservice-get', { invoiceId }, sessionToken),
+  mahnserviceSubmit: (submission, sessionToken) => ipcRenderer.invoke('zyro-paywise:request', 'mahnservice-submit', submission, sessionToken),
+  mahnservicePayment: (invoiceId, sessionToken) => ipcRenderer.invoke('zyro-paywise:request', 'mahnservice-payment', { invoiceId }, sessionToken),
+})
+
 contextBridge.exposeInMainWorld('zyroCloud', {
   status: () => ipcRenderer.invoke('zyro-cloud:status'),
   enable: (adminToken, sessionToken) => ipcRenderer.invoke('zyro-cloud:enable', adminToken, sessionToken),

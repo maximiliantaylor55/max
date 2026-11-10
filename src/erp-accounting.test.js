@@ -5,6 +5,7 @@ import {
   createPurchaseFinanceEntry,
   createSalesInvoiceFinanceEntry,
   getSkr03AccountSuggestion,
+  reconcilePaidSalesInvoices,
 } from './erp-accounting.js'
 
 const entries = [
@@ -73,6 +74,62 @@ test('prepares legacy sales invoices without item arrays', () => {
   }, { id: 'finance-legacy' })
   assert.equal(entry.grossCents, 3210)
   assert.equal(entry.accountNumber, '8300')
+})
+
+test('automatically links paid invoices to BWA entries without duplicates', () => {
+  const invoice = {
+    id: 'invoice-1',
+    kind: 'rechnung',
+    status: 'Bezahlt',
+    documentDate: '2026-10-12',
+    paidAt: '2026-10-20',
+    number: 'RE-2026-0001',
+    recipient: 'Getränkemarkt GmbH',
+    vatRate: 19,
+    items: [{ quantity: 2, unitPrice: 10 }],
+  }
+  const createId = () => 'finance-1'
+  const first = reconcilePaidSalesInvoices([invoice], [], createId)
+  assert.equal(first.entries.length, 1)
+  assert.equal(first.entries[0].sourceDocumentId, invoice.id)
+  assert.equal(first.entries[0].paidAt, invoice.paidAt)
+  assert.deepEqual(reconcilePaidSalesInvoices([invoice], first.entries, createId), {
+    entries: first.entries,
+    issues: [],
+  })
+})
+
+test('links a matching existing income entry instead of duplicating a paid invoice', () => {
+  const invoice = {
+    id: 'invoice-1',
+    kind: 'rechnung',
+    status: 'Bezahlt',
+    documentDate: '2026-10-12',
+    paidAt: '2026-10-20',
+    number: 'RE-100',
+    recipient: 'Getränkemarkt GmbH',
+    vatRate: 19,
+    items: [{ quantity: 1, unitPrice: 100 }],
+  }
+  const existing = { ...entries[0], date: invoice.documentDate, grossCents: 11900 }
+  const result = reconcilePaidSalesInvoices([invoice], [existing], () => 'unused')
+  assert.equal(result.entries.length, 1)
+  assert.equal(result.entries[0].sourceDocumentId, invoice.id)
+})
+
+test('does not auto-book a paid invoice without a payment date', () => {
+  const invoice = {
+    id: 'invoice-1',
+    kind: 'rechnung',
+    status: 'Bezahlt',
+    documentDate: '2026-10-12',
+    number: 'RE-100',
+    vatRate: 19,
+    items: [{ quantity: 1, unitPrice: 100 }],
+  }
+  const result = reconcilePaidSalesInvoices([invoice], [], () => 'finance-1')
+  assert.equal(result.entries.length, 0)
+  assert.match(result.issues[0], /Zahlungsdatum fehlt/)
 })
 
 test('prepares an incoming invoice as a linked purchase expense', () => {

@@ -22,14 +22,19 @@ const buildOrderConfirmationEmail = ({ order, orderNumber, paymentInfo }) => {
       ['IBAN', paymentInfo.iban],
       ['Verwendungszweck', paymentInfo.reference],
     ]
-    : [
-      ['Zahlung', order.paymentMethod === 'stripe' ? (order.paymentStatus === 'paid' ? 'Online-Zahlung erhalten' : 'Online-Zahlung (Karte, Apple Pay, SEPA)') : (order.paymentStatus === 'paid' ? 'PayPal-Zahlung erhalten' : 'PayPal')],
-      ['Verwendungszweck', paymentInfo.reference],
-    ]
+    : [[
+      'Zahlung',
+      order.paymentMethod === 'stripe'
+        ? (order.paymentStatus === 'paid' ? 'Online-Zahlung erhalten' : 'Online-Zahlung (Karte, Apple Pay, SEPA)')
+        : (order.paymentStatus === 'paid' ? 'PayPal-Zahlung erhalten' : 'PayPal'),
+    ]]
   const itemsText = order.items.map((item) => (
     `${item.productName} · ${item.quantity} Dosen · ${item.largeCartonCount} 24er-Trays · ${item.smallCartonCount} Einzeldosen · ${formatCurrency(item.lineTotalCents)}${item.isPreorder ? `\n  VORBESTELLUNG${item.expectedDeliveryDate ? ` · voraussichtliche Lieferung: ${new Date(`${item.expectedDeliveryDate}T00:00:00.000Z`).toLocaleDateString('de-DE', { timeZone: 'UTC' })}` : ''}` : ''}`
   )).join('\n')
   const paymentText = paymentLines.map(([label, value]) => `${label}: ${value}`).join('\n')
+  const paymentInstructions = order.paymentMethod === 'vorkasse'
+    ? 'Bitte nutze die Bestellnummer als Verwendungszweck.'
+    : order.paymentMethod === 'paypal' ? 'Deine PayPal-Zahlung wurde sicher bestätigt.' : 'Deine Online-Zahlung wurde sicher bestätigt.'
   const itemRows = order.items.map((item) => `
     <tr>
       <td style="padding:16px 12px;border-bottom:1px solid #e5e9e1;font-family:Arial,sans-serif;color:#18231d;font-size:14px;line-height:20px;">
@@ -48,7 +53,7 @@ const buildOrderConfirmationEmail = ({ order, orderNumber, paymentInfo }) => {
   const date = new Date().toLocaleDateString('de-DE', { timeZone: 'Europe/Berlin' })
 
   return {
-    text: `Hallo ${order.name},\n\nwir haben deine Bestellung ${orderNumber} erhalten.${order.hasPreorderItems ? '\n\nHinweis: Deine Bestellung enthält Vorbestellartikel. Die voraussichtlichen Liefertermine stehen direkt bei den Artikeln.' : ''}\n\n${itemsText}\n\nVersandart: ${shippingDetails}\nZwischensumme: ${subtotal}\nVersand: ${shipping}\n${order.depositCents > 0 ? `Pfand (zzgl., nicht steuerbar): ${formatCurrency(order.depositCents)}\n` : ''}${order.pricesIncludeVat ? `Enthaltene MwSt. (${order.vatRate}%): ${vat}` : `MwSt. (${order.vatRate}%): ${vat}`}\nGesamtbetrag: ${total}\n\n${paymentText}\nBitte nutze die Bestellnummer als Verwendungszweck.\n\nVielen Dank für deine Bestellung.\nZYRO · Liberty Street Food GmbH`,
+    text: `Hallo ${order.name},\n\nwir haben deine Bestellung ${orderNumber} erhalten.${order.hasPreorderItems ? '\n\nHinweis: Deine Bestellung enthält Vorbestellartikel. Die voraussichtlichen Liefertermine stehen direkt bei den Artikeln.' : ''}\n\n${itemsText}\n\nVersandart: ${shippingDetails}\nZwischensumme: ${subtotal}\nVersand: ${shipping}\n${order.depositCents > 0 ? `Pfand (zzgl., nicht steuerbar): ${formatCurrency(order.depositCents)}\n` : ''}${order.pricesIncludeVat ? `Enthaltene MwSt. (${order.vatRate}%): ${vat}` : `MwSt. (${order.vatRate}%): ${vat}`}\nGesamtbetrag: ${total}\n\n${paymentText}\n${paymentInstructions}\n\nVielen Dank für deine Bestellung.\nZYRO · Liberty Street Food GmbH`,
     html: `<!doctype html>
 <html lang="de">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"></head>
@@ -98,7 +103,7 @@ const buildOrderConfirmationEmail = ({ order, orderNumber, paymentInfo }) => {
         <tr><td style="padding:0 30px 28px;">
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color:#18231d;">
             <tr><td style="padding:19px 20px 7px;color:#c9ed4f;font-family:Arial,sans-serif;font-size:10px;font-weight:bold;letter-spacing:1px;">${order.paymentMethod === 'vorkasse' ? 'ZAHLUNG PER VORKASSE' : order.paymentMethod === 'stripe' ? 'ONLINE-ZAHLUNG' : 'ZAHLUNG PER PAYPAL'}</td></tr>
-            <tr><td style="padding:0 20px 16px;color:#d7dfd5;font-family:Arial,sans-serif;font-size:12px;line-height:18px;">Bitte nutze die Bestellnummer als Verwendungszweck.</td></tr>
+            <tr><td style="padding:0 20px 16px;color:#d7dfd5;font-family:Arial,sans-serif;font-size:12px;line-height:18px;">${escapeHtml(paymentInstructions)}</td></tr>
             <tr><td style="padding:0 20px 19px;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">${paymentRows}</table></td></tr>
           </table>
         </td></tr>

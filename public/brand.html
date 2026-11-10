@@ -4,8 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#fff8eb" />
-    <meta name="description" content="Erfrischende Pfirsich-Maracuja-Limonade von ZYRO in der 500-ml-Dose. Entdecke die Limonade und bestelle einzelne Dosen oder 24er-Trays direkt im Shop." />
-    <title>ZYRO® — Erfrischende Pfirsich-Maracuja-Limonade</title>
+    <meta name="description" content="ZYRO Getränke aus Siegen: zuckerfreie Pfirsich-Maracuja-Limonade in der 500-ml-Dose. Jetzt einzelne Dosen oder 24er-Trays direkt im ZYRO-Shop bestellen." />
+    <title>ZYRO® Getränke — Pfirsich-Maracuja-Limonade zuckerfrei in der 0,5-l-Dose</title>
     <link rel="canonical" href="https://xn--zyro-getrnke-ocb.de/" />
     <meta name="robots" content="index, follow, max-image-preview:large" />
     <meta property="og:type" content="website" />
@@ -16,17 +16,20 @@
     <meta property="og:url" content="https://xn--zyro-getrnke-ocb.de/" />
     <meta property="og:image" content="https://xn--zyro-getrnke-ocb.de/zyro-pfirsich-maracuja-can-transparent.png" />
     <meta name="twitter:card" content="summary_large_image" />
-    <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Brand","name":"ZYRO","url":"https://xn--zyro-getrnke-ocb.de/"},{"@type":"WebSite","name":"ZYRO","url":"https://xn--zyro-getrnke-ocb.de/","inLanguage":"de-DE"}]}</script>
+    <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://xn--zyro-getrnke-ocb.de/#organization","name":"ZYRO","legalName":"Liberty Street Food GmbH","url":"https://xn--zyro-getrnke-ocb.de/","logo":"https://xn--zyro-getrnke-ocb.de/favicon.svg","email":"info@zyro-getränke.de","address":{"@type":"PostalAddress","streetAddress":"Birlenbacherstr. 59","postalCode":"57078","addressLocality":"Siegen","addressCountry":"DE"}},{"@type":"Brand","@id":"https://xn--zyro-getrnke-ocb.de/#brand","name":"ZYRO","url":"https://xn--zyro-getrnke-ocb.de/","logo":"https://xn--zyro-getrnke-ocb.de/favicon.svg"},{"@type":"WebSite","@id":"https://xn--zyro-getrnke-ocb.de/#website","name":"ZYRO","alternateName":["ZYRO Getränke","zyro-getränke.de"],"url":"https://xn--zyro-getrnke-ocb.de/","inLanguage":"de-DE","publisher":{"@id":"https://xn--zyro-getrnke-ocb.de/#organization"}},{"@type":"Product","name":"ZYRO Pfirsich-Maracuja-Limonade 0,5 l","description":"Zuckerfreie, kohlensäurehaltige Pfirsich-Maracuja-Limonade in der 500-ml-Dose.","image":"https://xn--zyro-getrnke-ocb.de/zyro-pfirsich-maracuja-can-transparent.png","brand":{"@id":"https://xn--zyro-getrnke-ocb.de/#brand"},"gtin13":"4270005618807","category":"Erfrischungsgetränke"}]}</script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/brand.css?v=20261029-mobile" />
-    <link rel="stylesheet" href="/brand-refresh.css?v=9" />
-    <link rel="stylesheet" href="/shop-components.css?v=14" />
+    <link rel="stylesheet" href="/fonts/fonts.css?v=1" />
+    <link rel="stylesheet" href="/brand.css?v=20261110-fonts" />
+    <link rel="stylesheet" href="/brand-refresh.css?v=10" />
+    <link rel="stylesheet" href="/shop-components.css?v=18" />
+    <link rel="stylesheet" href="/cookie-hinweis.css?v=3" />
+    <link rel="stylesheet" href="/newsletter.css?v=1" />
     <script src="/brand.js?v=20261105-email-link" defer></script>
-    <script type="module" src="/shop.js?v=34"></script>
+    <script type="module" src="/shop.js?v=42"></script>
     <script src="/shop-fx.js?v=3" defer></script>
+    <script src="/tracking-config.js?v=1" defer></script>
+    <script src="/cookie-hinweis.js?v=2" defer></script>
+    <script src="/newsletter.js?v=1" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">Zum Inhalt springen</a>
@@ -203,57 +206,110 @@
         </form>
       </section>
 
+      <section class="zyro-newsletter" id="newsletter" aria-labelledby="newsletter-title">
+        <div class="zyro-newsletter-copy">
+          <p class="eyebrow">Newsletter</p>
+          <h2 id="newsletter-title">NEUE SORTEN<br /><span>ZUERST WISSEN.</span></h2>
+          <p>Neue Geschmacksrichtungen, Aktionen und exklusive Rabattcodes – direkt in dein Postfach. Kein Spam, Abmeldung jederzeit.</p>
+        </div>
+        <form class="zyro-newsletter-form" id="newsletter-form" novalidate>
+          <div class="zyro-newsletter-fields">
+            <label>Vorname <small>(optional)</small><input name="name" autocomplete="given-name" maxlength="80" /></label>
+            <label>E-Mail<input name="email" type="email" inputmode="email" autocomplete="email" maxlength="254" required /></label>
+          </div>
+          <div class="contact-honeypot" aria-hidden="true"><label>Website<input name="website" tabindex="-1" autocomplete="off" /></label></div>
+          <label class="zyro-newsletter-consent"><input type="checkbox" name="consent" required /> <span>Ich möchte den ZYRO-Newsletter mit Neuigkeiten, Sorten und Angeboten per E-Mail erhalten. Abmeldung jederzeit über den Link in jeder E-Mail. Mehr in den <a href="/datenschutz.html#newsletter">Datenschutzhinweisen</a>.</span></label>
+          <button class="zyro-newsletter-submit" type="submit"><span>Anmelden</span><span aria-hidden="true">↗</span></button>
+          <p class="zyro-newsletter-status" id="newsletter-status" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+
       <section class="contact-strip" aria-label="Kontakt zu ZYRO">
         <p>FRAGEN?<br /><span>FRUCHTPOST.</span></p>
         <a href="#kontakt">Schreib uns eine Nachricht <span aria-hidden="true">↗</span></a>
       </section>
     </main>
 
-    <aside id="cart-panel" class="drawer shop-drawer" aria-label="Warenkorb" hidden>
-      <div class="drawer-head"><h2>Warenkorb</h2><button type="button" class="close" data-close aria-label="Schließen">✕</button></div>
-      <div id="cart-lines"></div>
-      <section id="discount-progress" class="discount-progress" aria-live="polite" hidden></section>
-      <dl id="cart-totals" class="totals"></dl>
-      <form id="discount-form" class="discount-form" hidden>
-        <label for="discount-code">Rabattcode</label>
-        <input id="discount-code" type="text" maxlength="32" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Code eingeben" />
-        <button type="submit" class="shop-primary" id="apply-discount">Code anwenden</button>
-        <p id="discount-message" class="notice" role="status" hidden></p>
-      </form>
-      <button type="button" class="shop-primary" id="to-checkout" hidden>Zur Kasse</button>
-      <form id="checkout-form" class="checkout" hidden>
-        <h3>Lieferung &amp; Kontakt</h3>
-        <button type="button" class="link checkout-account-link" id="checkout-account">Mit Kundenkonto anmelden oder registrieren</button>
-        <input name="website" class="trap" tabindex="-1" autocomplete="off" aria-hidden="true" />
-        <label>Name<input name="name" required maxlength="100" autocomplete="name" /></label>
-        <label>Unternehmen (optional)<input name="company" maxlength="120" autocomplete="organization" /></label>
-        <label>E-Mail<input name="email" type="email" required maxlength="254" autocomplete="email" /></label>
-        <label>Telefon (optional)<input name="phone" type="tel" maxlength="40" autocomplete="tel" /></label>
-        <label>Straße &amp; Nr.<input name="address" required maxlength="180" autocomplete="street-address" /></label>
-        <div class="two"><label>PLZ<input name="postalCode" required maxlength="10" autocomplete="postal-code" /></label><label>Ort<input name="city" required maxlength="100" autocomplete="address-level2" /></label></div>
-        <details class="billing-details">
-          <summary>Abweichende Rechnungsadresse oder USt-IdNr. (optional)</summary>
-          <div class="billing-fields">
-            <label>Firma / Name<input name="billingCompany" maxlength="120" autocomplete="billing organization" /></label>
-            <label>Rechnungs-E-Mail<input name="billingEmail" type="email" maxlength="254" autocomplete="billing email" /></label>
-            <label>Straße &amp; Nr.<input name="billingAddress" maxlength="180" autocomplete="billing street-address" /></label>
-            <div class="two"><label>PLZ<input name="billingPostalCode" maxlength="10" autocomplete="billing postal-code" /></label><label>Ort<input name="billingCity" maxlength="100" autocomplete="billing address-level2" /></label></div>
-            <label>USt-IdNr.<input name="vatId" maxlength="20" autocomplete="off" placeholder="z. B. DE123456789" /></label>
+    <aside id="cart-panel" class="drawer shop-drawer cart-drawer" aria-label="Warenkorb" hidden>
+      <div class="drawer-head cart-head"><div><p class="eyebrow">Deine Auswahl</p><h2>Warenkorb <span id="cart-item-count">0 Artikel</span></h2></div><button type="button" class="close" data-close aria-label="Schließen">✕</button></div>
+      <div class="cart-content">
+        <div id="cart-lines"></div>
+        <section id="discount-progress" class="discount-progress" aria-live="polite" hidden></section>
+      </div>
+      <div class="cart-footer">
+        <dl id="cart-totals" class="totals"></dl>
+        <form id="discount-form" class="discount-form" hidden>
+          <label for="discount-code">Rabattcode</label>
+          <div class="discount-input-row">
+            <input id="discount-code" type="text" maxlength="32" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Code eingeben" />
+            <button type="submit" class="shop-primary" id="apply-discount">Anwenden</button>
           </div>
-        </details>
-        <label>Nachricht (optional)<textarea name="note" maxlength="1000" rows="2"></textarea></label>
-        <fieldset class="pay" id="pay-methods">
-          <legend>Zahlart</legend>
-          <label class="check" id="pay-stripe" hidden><input type="radio" name="payment" value="stripe" /> <span>Online zahlen (Karte, Apple Pay, SEPA)</span></label>
-          <label class="check" id="pay-vorkasse" hidden><input type="radio" name="payment" value="vorkasse" /> <span>Vorkasse (Überweisung)</span></label>
-        </fieldset>
-        <label class="check"><input type="checkbox" name="privacy" required /> <span>Ich habe die <a href="/datenschutz.html" target="_blank" rel="noopener">Datenschutzhinweise</a> gelesen.</span></label>
-        <p id="checkout-message" class="notice" role="alert" hidden></p>
-        <button type="submit" class="shop-primary" id="submit-order">Zahlungspflichtig bestellen</button>
-      </form>
+          <p id="discount-message" class="notice" role="status" hidden></p>
+        </form>
+        <button type="button" class="shop-primary" id="to-checkout" hidden>Zur Kasse gehen</button>
+        <p class="cart-secure-note">Sichere Zahlung · Versandkosten werden vor dem Kauf angezeigt</p>
+      </div>
     </aside>
-    <aside id="product-panel" class="drawer shop-drawer" aria-label="Artikeldetails" hidden>
-      <div class="drawer-head"><h2 id="detail-title">Artikel</h2><button type="button" class="close" data-close aria-label="Schließen">✕</button></div>
+    <aside id="checkout-panel" class="drawer shop-drawer checkout-panel" role="dialog" aria-modal="true" aria-labelledby="checkout-title" tabindex="-1" hidden>
+      <header class="drawer-head checkout-head">
+        <div><p class="eyebrow">Fast geschafft</p><h2 id="checkout-title">Kasse</h2></div>
+        <div class="checkout-head-actions">
+          <button type="button" class="checkout-edit" id="back-to-cart">← Warenkorb bearbeiten</button>
+          <button type="button" class="close" data-close aria-label="Kasse schließen">✕</button>
+        </div>
+      </header>
+      <div class="checkout-content">
+        <form id="checkout-form" class="checkout checkout-layout">
+          <div class="checkout-fields">
+            <section class="checkout-section">
+              <h3>Lieferung &amp; Kontakt</h3>
+              <button type="button" class="link checkout-account-link" id="checkout-account">Mit Kundenkonto anmelden oder registrieren</button>
+              <input name="website" class="trap" tabindex="-1" autocomplete="off" aria-hidden="true" />
+              <label>Name<input name="name" required maxlength="100" autocomplete="name" /></label>
+              <label>Unternehmen (optional)<input name="company" maxlength="120" autocomplete="organization" /></label>
+              <label>E-Mail<input name="email" type="email" required maxlength="254" autocomplete="email" /></label>
+              <label>Telefon (optional)<input name="phone" type="tel" maxlength="40" autocomplete="tel" /></label>
+              <label>Straße &amp; Nr.<input name="address" required maxlength="180" autocomplete="street-address" /></label>
+              <div class="two"><label>PLZ<input name="postalCode" required maxlength="10" autocomplete="postal-code" /></label><label>Ort<input name="city" required maxlength="100" autocomplete="address-level2" /></label></div>
+              <details class="billing-details">
+                <summary>Abweichende Rechnungsadresse oder USt-IdNr. (optional)</summary>
+                <div class="billing-fields">
+                  <label>Firma / Name<input name="billingCompany" maxlength="120" autocomplete="billing organization" /></label>
+                  <label>Rechnungs-E-Mail<input name="billingEmail" type="email" maxlength="254" autocomplete="billing email" /></label>
+                  <label>Straße &amp; Nr.<input name="billingAddress" maxlength="180" autocomplete="billing street-address" /></label>
+                  <div class="two"><label>PLZ<input name="billingPostalCode" maxlength="10" autocomplete="billing postal-code" /></label><label>Ort<input name="billingCity" maxlength="100" autocomplete="billing address-level2" /></label></div>
+                  <label>USt-IdNr.<input name="vatId" maxlength="20" autocomplete="off" placeholder="z. B. DE123456789" /></label>
+                </div>
+              </details>
+              <label>Nachricht (optional)<textarea name="note" maxlength="1000" rows="2"></textarea></label>
+            </section>
+            <fieldset class="pay" id="pay-methods">
+              <legend>Zahlart</legend>
+              <label class="check" id="pay-stripe" hidden><input type="radio" name="payment" value="stripe" /> <span>Online zahlen (Karte, Apple Pay, SEPA)</span></label>
+              <label class="check is-unavailable" id="pay-paypal">
+                <input type="radio" name="payment" value="paypal" disabled />
+                <span>PayPal <small class="pay-unavailable" id="paypal-status-note">PayPal ist noch nicht eingerichtet.</small></span>
+              </label>
+              <label class="check" id="pay-vorkasse" hidden><input type="radio" name="payment" value="vorkasse" /> <span>Vorkasse (Überweisung)</span></label>
+            </fieldset>
+            <label class="check checkout-privacy"><input type="checkbox" name="privacy" required /> <span>Ich habe die <a href="/datenschutz.html" target="_blank" rel="noopener">Datenschutzhinweise</a> gelesen.</span></label>
+<p class="cart-secure-note checkout-legal">Es gelten unsere <a href="/agb.html" target="_blank" rel="noopener">AGB</a>. Informationen zu deinem Widerrufsrecht findest du in der <a href="/widerruf.html" target="_blank" rel="noopener">Widerrufsbelehrung</a>. Nach der Zustellung bitten wir dich ggf. per E-Mail um eine Bewertung; dem kannst du jederzeit widersprechen.</p>
+            <p id="checkout-message" class="notice" role="alert" hidden></p>
+            <div id="paypal-button-container" hidden></div>
+            <button type="submit" class="shop-primary" id="submit-order">Zahlungspflichtig bestellen</button>
+            <p class="cart-secure-note">Sichere Zahlung · Deine Daten werden verschlüsselt übertragen</p>
+          </div>
+          <aside class="checkout-summary" aria-label="Bestellübersicht">
+            <h3>Deine Bestellung</h3>
+            <div id="checkout-order-lines"></div>
+            <dl id="checkout-totals" class="totals"></dl>
+            <p class="checkout-summary-note">Versand und Pfand sind im Gesamtbetrag ausgewiesen.</p>
+          </aside>
+        </form>
+      </div>
+    </aside>
+    <aside id="product-panel" class="drawer shop-drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title" tabindex="-1" hidden>
+      <div class="drawer-head"><div><p class="eyebrow">Produkt entdecken</p><h2 id="detail-title">Artikel</h2></div><button type="button" class="close" data-close aria-label="Schließen">✕</button></div>
       <div id="detail-body" class="detail-body"></div>
     </aside>
     <aside id="account-panel" class="drawer shop-drawer" role="dialog" aria-modal="true" aria-labelledby="account-title" tabindex="-1" hidden>
@@ -327,7 +383,7 @@
 
     <footer class="site-footer">
       <a class="wordmark footer-wordmark" href="#top">ZYRO<span>®</span></a>
-      <div class="footer-meta"><span>© <span id="current-year"></span> ZYRO</span><span><a href="/impressum.html">Impressum</a> · <a href="/datenschutz.html">Datenschutz</a></span></div>
+      <div class="footer-meta"><span>© <span id="current-year"></span> ZYRO</span><span><a href="/impressum.html">Impressum</a> · <a href="/datenschutz.html">Datenschutz</a> · <a href="/agb.html">AGB</a> · <a href="/widerruf.html">Widerrufsbelehrung</a> · <a href="/widerruf-erklaeren">Vertrag widerrufen</a> · <a href="/?cookie-einstellungen" data-cookie-settings>Cookie-Einstellungen</a></span></div>
     </footer>
   </body>
-</html>
+</html>

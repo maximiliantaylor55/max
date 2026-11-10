@@ -1,4 +1,5 @@
 import { getNextDiscountTarget } from './shop-discount-progress.js'
+import { getShopProductImages } from './shop-product-images.js'
 import { getShopQuantityOptions } from './shop-quantity-options.js'
 
 (() => {
@@ -19,6 +20,7 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
   let passwordResetContext = null
   let accountReturnFocus = null
   let accountReturnPanel = ''
+  let productReturnFocus = null
 
   const el = (tag, className, text) => {
     const node = document.createElement(tag)
@@ -114,23 +116,6 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     renderCart()
   }
 
-  const canNode = (productName) => {
-    const node = el('img', 'can-product')
-    node.src = '/zyro-pfirsich-maracuja-can-transparent.png'
-    node.alt = productName
-      ? `Originaldose ${productName}, 500 ml`
-      : 'Originaldose der erfrischenden ZYRO Pfirsich-Maracuja-Limonade, 500 ml'
-    node.loading = 'lazy'
-    return node
-  }
-
-  const displayImages = (product) => {
-    if (product.id === 'zyr-pm-1') return []
-    return Array.isArray(product.images) && product.images.length
-      ? product.images
-      : (product.image ? [product.image] : [])
-  }
-
   const appendNutrition = (box, product) => {
     const values = product.nutritionValues || {}
     const hasStructuredValues = Object.values(values).some((value) => value !== '' && value !== null && value !== undefined)
@@ -191,7 +176,8 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     $('#detail-title').textContent = product.name
     const box = $('#detail-body')
     box.replaceChildren()
-    const images = displayImages(product)
+    const images = getShopProductImages(product)
+    const gallery = el('div', 'product-detail-gallery')
     const visual = el('div', 'visual detail-visual')
     const [from, to] = gradients[index % gradients.length].split(',')
     visual.style.background = `linear-gradient(160deg, ${from}, ${to})`
@@ -201,10 +187,8 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
       photo.alt = product.name
       visual.classList.add('has-photo')
       visual.append(photo)
-    } else {
-      visual.append(canNode(product.name))
     }
-    box.append(visual)
+    gallery.append(visual)
     if (images.length > 1) {
       const thumbnails = el('div', 'detail-thumbnails')
       images.forEach((image, imageIndex) => {
@@ -231,17 +215,60 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
         })
         thumbnails.append(button)
       })
-      box.append(thumbnails)
+      gallery.append(thumbnails)
     }
-    box.append(el('h3', '', product.name))
-    appendReviewSummary(box, product, true)
-    if (product.category) box.append(el('p', 'hint', product.category))
+    const info = el('div', 'product-detail-info')
+    if (product.category) info.append(el('p', 'product-detail-category', product.category))
+    appendReviewSummary(info, product, true)
     if (product.stock === 0 && product.preorderEnabled) {
-      box.append(el('p', 'badge warn', `Vorbestellung${product.expectedDeliveryDate ? ` · voraussichtliche Lieferung ${formatDate(product.expectedDeliveryDate)}` : ''}`))
+      info.append(el('p', 'product-detail-stock preorder', `Vorbestellung möglich${product.expectedDeliveryDate ? ` · voraussichtliche Lieferung ${formatDate(product.expectedDeliveryDate)}` : ''}`))
+    } else if (Number.isSafeInteger(product.stock)) {
+      info.append(el('p', `product-detail-stock${product.stock > 0 ? ' available' : ' sold-out'}`, product.stock > 0 ? `Auf Lager · ${doseLabel(product.stock)}` : 'Aktuell ausverkauft'))
     }
-    box.append(el('p', 'detail-text', product.description || 'Zu diesem Artikel gibt es noch keine Beschreibung.'))
-    if (product.ingredients) box.append(el('h4', 'detail-h', 'Zutaten'), el('p', 'detail-text', product.ingredients))
-    appendNutrition(box, product)
+    info.append(el('p', 'product-detail-description', product.description || 'Zu diesem Artikel gibt es noch keine Beschreibung.'))
+    const price = el('div', 'product-detail-price')
+    if (shop.businessPricing?.active) {
+      price.append(el('strong', '', euro(product.cratePriceCents)), el('span', '', 'pro 24er-Tray'))
+    } else {
+      price.append(el('strong', '', euro(Math.round(product.cratePriceCents / 24))), el('span', '', 'pro Dose'))
+      price.append(el('small', '', `${euro(product.cratePriceCents)} pro 24er-Tray`))
+    }
+    info.append(price)
+    const preorder = product.stock === 0 && product.preorderEnabled
+    const businessCustomer = shop.businessPricing?.active === true
+    const step = businessCustomer ? 24 : 1
+    const availableQuantity = Number.isSafeInteger(product.stock) && !preorder
+      ? Math.max(0, product.stock - (Number(cart[product.id]) || 0))
+      : 9999
+    const maxQuantity = businessCustomer ? Math.floor(availableQuantity / 24) * 24 : availableQuantity
+    const purchase = el('div', 'product-detail-purchase')
+    const quantityLabel = el('label', 'product-detail-quantity')
+    quantityLabel.append(el('span', '', businessCustomer ? 'Trays' : 'Menge'))
+    const quantityInput = el('input')
+    quantityInput.type = 'number'
+    quantityInput.min = String(step)
+    quantityInput.max = String(Math.max(step, maxQuantity))
+    quantityInput.step = String(step)
+    quantityInput.value = String(step)
+    quantityInput.setAttribute('aria-label', businessCustomer ? `Anzahl 24er-Trays ${product.name}` : `Anzahl Dosen ${product.name}`)
+    quantityLabel.append(quantityInput)
+    const add = el('button', 'shop-primary product-detail-add', businessCustomer
+      ? 'In den Warenkorb'
+      : preorder ? 'Vorbestellen' : 'In den Warenkorb')
+    add.type = 'button'
+    add.disabled = Number.isSafeInteger(product.stock) && !preorder && maxQuantity < step
+    quantityInput.disabled = add.disabled
+    quantityInput.addEventListener('change', () => {
+      const requested = Math.max(step, Math.floor(Number(quantityInput.value) / step) * step || step)
+      quantityInput.value = String(Math.min(Math.max(step, maxQuantity), requested))
+    })
+    add.addEventListener('click', () => {
+      const quantity = Math.min(Math.max(step, maxQuantity), Math.floor(Number(quantityInput.value) / step) * step || step)
+      setQuantity(product.id, (cart[product.id] || 0) + quantity)
+      openPanel('#cart-panel')
+    })
+    purchase.append(quantityLabel, add)
+    info.append(purchase)
     const facts = el('ul', 'detail-facts')
     facts.append(el('li', '', shop.businessPricing?.active
       ? `Geschäftskundenpreis: ${euro(product.cratePriceCents)} pro 24er-Tray`
@@ -258,23 +285,20 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
         ? (product.preorderEnabled ? `Vorbestellung möglich${product.expectedDeliveryDate ? ` · voraussichtliche Lieferung ${formatDate(product.expectedDeliveryDate)}` : ''}` : 'Aktuell ausverkauft')
         : availableStock))
     }
-    box.append(facts)
-    const preorder = product.stock === 0 && product.preorderEnabled
-    const businessCustomer = shop.businessPricing?.active === true
-    const add = el('button', 'primary', businessCustomer ? '1 Tray in den Warenkorb' : preorder ? '1 Dose vorbestellen' : '1 Dose in den Warenkorb')
-    add.type = 'button'
-    const availableTrays = Number.isSafeInteger(product.stock) && !preorder
-      ? Math.floor(Math.max(0, product.stock - (Number(cart[product.id]) || 0)) / 24)
-      : 1
-    add.disabled = businessCustomer
-      ? availableTrays < 1
-      : Number.isSafeInteger(product.stock) && product.stock < 1 && !preorder
-    add.addEventListener('click', () => {
-      setQuantity(product.id, businessCustomer ? (cart[product.id] || 0) + 24 : (cart[product.id] || 0) + 1)
-      openPanel('#cart-panel')
-    })
-    if (businessCustomer) box.insertBefore(el('p', 'hint', `Geschäftskunden bestellen in vollen 24er-Trays · ${euro(product.cratePriceCents)} pro Tray`), box.querySelector('.detail-facts'))
-    box.append(add)
+    const details = el('div', 'product-detail-extra')
+    details.append(facts)
+    if (product.ingredients) {
+      const ingredients = el('section', 'product-detail-section')
+      ingredients.append(el('h3', '', 'Zutaten'), el('p', 'detail-text', product.ingredients))
+      details.append(ingredients)
+    }
+    if (product.nutritionValues || product.nutrition) {
+      const nutrition = el('section', 'product-detail-section')
+      appendNutrition(nutrition, product)
+      details.append(nutrition)
+    }
+    info.append(details)
+    box.append(gallery, info)
     openPanel('#product-panel')
   }
 
@@ -316,7 +340,7 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
       const visual = el('div', 'visual')
       const [from, to] = gradients[index % gradients.length].split(',')
       visual.style.background = `linear-gradient(160deg, ${from}, ${to})`
-      const images = displayImages(product)
+      const images = getShopProductImages(product)
       if (images[0] && images[0].startsWith('data:image/')) {
         const photo = el('img', 'photo')
         photo.src = images[0]
@@ -324,8 +348,6 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
         photo.loading = 'lazy'
         visual.classList.add('has-photo')
         visual.append(photo)
-      } else {
-        visual.append(canNode(product.name))
       }
       if (Number.isSafeInteger(product.stock)) {
         const businessTrays = Math.floor(product.stock / 24)
@@ -589,16 +611,29 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     const lines = $('#cart-lines')
     lines.replaceChildren()
     const ids = Object.keys(cart).filter((id) => productById(id))
+    const itemCount = ids.reduce((count, id) => count + (Number(cart[id]) || 0), 0)
+    $('#cart-item-count').textContent = `${itemCount} Artikel`
     ids.forEach((id) => {
       const product = productById(id)
       const quantity = cart[id]
       const percent = tierPercent(product, quantity)
-      const line = el('div', 'line')
-      line.append(el('b', '', product.name))
+      const line = el('article', 'line')
+      const images = getShopProductImages(product)
+      const thumbnail = el('div', 'line-thumb')
+      if (images[0] && images[0].startsWith('data:image/')) {
+        const image = el('img')
+        image.src = images[0]
+        image.alt = ''
+        image.loading = 'lazy'
+        thumbnail.append(image)
+      }
+      const details = el('div', 'line-main')
+      details.append(el('b', '', product.name))
       const businessCustomer = shop.businessPricing?.active === true
+      line.classList.toggle('business-line', businessCustomer)
       if (businessCustomer) {
         const exactTrays = quantity % 24 === 0
-        line.append(el('span', 'hint', exactTrays
+        details.append(el('small', 'line-meta', exactTrays
           ? `${quantity / 24} ${quantity / 24 === 1 ? '24er-Tray' : '24er-Trays'} · ${doseLabel(quantity)}`
           : `${doseLabel(quantity)} · Bitte auf volle Trays ändern oder entfernen.`))
         const trayInput = el('input')
@@ -625,12 +660,16 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
         const remove = el('button', 'remove', 'Entfernen')
         remove.type = 'button'
         remove.addEventListener('click', () => setQuantity(id, 0))
-        line.append(trayInput, saveTrays, remove, el('span', 'sum', euro(lineCents(product, quantity))))
+        const quantityEditor = el('div', 'qty')
+        quantityEditor.append(trayInput, saveTrays)
+        const side = el('div', 'line-side')
+        side.append(el('span', 'sum', euro(lineCents(product, quantity))), remove)
+        line.append(thumbnail, details, quantityEditor, side)
         lines.append(line)
         return
       }
       if (product.stock === 0 && product.preorderEnabled) {
-        line.append(el('small', 'hint', `Vorbestellung${product.expectedDeliveryDate ? ` · voraussichtliche Lieferung ${formatDate(product.expectedDeliveryDate)}` : ''}`))
+        details.append(el('small', 'line-meta preorder-meta', `Vorbestellung${product.expectedDeliveryDate ? ` · Lieferung ab ${formatDate(product.expectedDeliveryDate)}` : ''}`))
       }
       const remove = el('button', 'remove', 'Entfernen')
       remove.type = 'button'
@@ -638,19 +677,33 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
       const qty = el('div', 'qty')
       const minus = el('button', '', '−'); minus.type = 'button'
       const plus = el('button', '', '+'); plus.type = 'button'
+      minus.setAttribute('aria-label', `${product.name}: Menge verringern`)
+      plus.setAttribute('aria-label', `${product.name}: Menge erhöhen`)
       minus.addEventListener('click', () => setQuantity(id, quantity - 1))
       plus.addEventListener('click', () => setQuantity(id, quantity + 1))
       qty.append(minus, el('span', '', doseLabel(quantity)), plus)
-      line.append(remove, qty, el('span', 'sum', euro(lineCents(product, quantity))))
-      if (percent) line.append(el('small', '', `Mengenrabatt −${percent}% aktiv`))
+      details.append(qty)
+      const side = el('div', 'line-side')
+      side.append(el('span', 'sum', euro(lineCents(product, quantity))), remove)
+      line.append(thumbnail, details, side)
+      if (percent) details.append(el('small', 'line-meta discount-meta', `Mengenrabatt −${percent}% aktiv`))
       lines.append(line)
     })
     const totals = $('#cart-totals')
     totals.replaceChildren()
     const empty = ids.length === 0
+    $('#cart-panel').classList.toggle('is-empty', empty)
     const invalidBusinessQuantity = shop.businessPricing?.active === true
       && ids.some((id) => Number(cart[id]) % 24 !== 0)
-    if (empty) lines.append(el('p', 'hint', 'Dein Warenkorb ist leer.'))
+    if (empty) {
+      const emptyState = el('div', 'cart-empty')
+      emptyState.append(el('span', 'cart-empty-icon', '🛍'), el('strong', '', 'Dein Warenkorb ist noch leer.'), el('p', '', 'Entdecke unsere Produkte und lege deinen Favoriten hinein.'))
+      const continueShopping = el('button', 'link', 'Weiter einkaufen')
+      continueShopping.type = 'button'
+      continueShopping.addEventListener('click', closePanels)
+      emptyState.append(continueShopping)
+      lines.append(emptyState)
+    }
     renderDiscountProgress(ids)
     const { subtotal, shipping, deposit, shippingPalletCount, businessShipping, businessDpdShipping, businessDpdParcelCount, invalidBusinessDpdShipping } = cartTotals()
     const discountCents = appliedDiscount?.subtotalCents === subtotal ? appliedDiscount.amountCents : 0
@@ -673,11 +726,28 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
       if (deposit > 0) row('Pfand (zzgl., ohne MwSt.)', euro(deposit))
       if (deposit > 0) row('Zahlbetrag inkl. Pfand', euro(subtotal - discountCents + shipping + deposit), 'grand')
     }
-    show($('#to-checkout'), !empty && $('#checkout-form').hidden)
+    const checkoutLines = $('#checkout-order-lines')
+    checkoutLines.replaceChildren()
+    ids.forEach((id) => {
+      const product = productById(id)
+      const summaryLine = el('div', 'checkout-order-line')
+      const images = getShopProductImages(product)
+      if (images[0]) {
+        const image = el('img', 'checkout-order-image')
+        image.src = images[0]
+        image.alt = ''
+        image.loading = 'lazy'
+        summaryLine.append(image)
+      }
+      const details = el('div', 'checkout-order-details')
+      details.append(el('strong', '', product.name), el('span', '', `${doseLabel(cart[id])} · ${euro(lineCents(product, cart[id]))}`))
+      summaryLine.append(details)
+      checkoutLines.append(summaryLine)
+    })
+    $('#checkout-totals').replaceChildren(...[...totals.children].map((item) => item.cloneNode(true)))
+    show($('#to-checkout'), !empty)
     $('#to-checkout').disabled = invalidBusinessQuantity || invalidBusinessDpdShipping
-    if (invalidBusinessQuantity || invalidBusinessDpdShipping) show($('#checkout-form'), false)
     show($('#discount-form'), !empty && !shop.businessPricing?.active)
-    if (empty) show($('#checkout-form'), false)
   }
 
   const applyDiscount = async () => {
@@ -707,10 +777,13 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     show($(selector))
     show($('#scrim'))
     document.body.classList.add('shop-panel-open')
-    if (selector === '#account-panel') {
+    if (selector === '#product-panel') productReturnFocus = document.activeElement
+    if (selector === '#account-panel' || selector === '#product-panel' || selector === '#checkout-panel') {
       window.requestAnimationFrame(() => {
-        const panel = $('#account-panel')
-        const first = [...panel.querySelectorAll('input:not([type="hidden"]),button:not(:disabled),textarea:not(:disabled),summary')]
+        const panel = $(selector)
+        const first = selector === '#checkout-panel'
+          ? panel.querySelector('#checkout-form input[name="name"]')
+          : [...panel.querySelectorAll('input:not([type="hidden"]):not(:disabled),button:not(:disabled),textarea:not(:disabled),select:not(:disabled),summary,a[href]')]
           .find((element) => !element.closest('[hidden]'))
         const focusTarget = first || panel
         focusTarget.focus()
@@ -725,13 +798,16 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     const returnPanel = accountReturnPanel
     accountReturnFocus = null
     accountReturnPanel = ''
+    const productFocus = productReturnFocus
+    productReturnFocus = null
     if (returnPanel) openPanel(returnPanel)
     if (returnFocus?.isConnected) returnFocus.focus()
+    else if (!returnPanel && productFocus?.isConnected) productFocus.focus()
   }
 
   const openAccountPanel = async (trigger) => {
     accountReturnFocus = trigger
-    accountReturnPanel = trigger.id === 'checkout-account' ? '#cart-panel' : ''
+    accountReturnPanel = trigger.id === 'checkout-account' ? '#checkout-panel' : ''
     openPanel('#account-panel')
     const token = sessionStorage.getItem(TOKEN_KEY)
     if (!token) {
@@ -759,7 +835,10 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     const form = event.target
     const message = $('#checkout-message')
     const button = $('#submit-order')
-    const data = new FormData(form)
+    if (new FormData(form).get('payment') === 'paypal') {
+      notice(message, 'Bitte nutze den PayPal-Button, um deine Zahlung sicher abzuschließen.')
+      return
+    }
     button.disabled = true
     notice(message, '')
     try {
@@ -767,36 +846,7 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
       const result = await api('/api/shop/order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({
-          website: data.get('website'),
-          name: data.get('name'),
-          company: data.get('company'),
-          email: data.get('email'),
-          address: data.get('address'),
-          postalCode: data.get('postalCode'),
-          city: data.get('city'),
-          phone: data.get('phone'),
-          billingEmail: data.get('billingEmail'),
-          billingCompany: data.get('billingCompany'),
-          billingAddress: data.get('billingAddress'),
-          billingPostalCode: data.get('billingPostalCode'),
-          billingCity: data.get('billingCity'),
-          vatId: data.get('vatId'),
-          note: data.get('note'),
-          paymentMethod: data.get('payment') || 'vorkasse',
-          privacyNoticeAcknowledged: data.get('privacy') === 'on',
-          businessPricingActive: shop.businessPricing?.active === true,
-          businessPrices: shop.businessPricing?.prices || {},
-          discountCode: appliedDiscount?.subtotalCents === cartTotals().subtotal ? appliedDiscount.code : '',
-          items: shop.businessPricing?.active
-            ? Object.entries(cart).map(([productId, quantity]) => {
-              if (!Number.isSafeInteger(quantity) || quantity < 24 || quantity % 24 !== 0) {
-                throw new Error('Geschäftskunden können nur volle 24er-Trays bestellen. Bitte den Warenkorb korrigieren.')
-              }
-              return { productId, trays: quantity / 24 }
-            })
-            : Object.entries(cart).map(([productId, quantity]) => ({ productId, quantity })),
-        }),
+        body: JSON.stringify(buildOrderPayload(form)),
       })
       if (result.checkoutUrl) {
         location.assign(result.checkoutUrl)
@@ -806,10 +856,11 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
       cart = {}
       saveCart()
       renderCart()
-      const panel = $('#cart-panel')
+      const panel = $('#checkout-panel')
       panel.replaceChildren()
       const success = el('div', 'success')
       success.append(el('h3', '', 'Danke für deine Bestellung! 🎉'), el('p', '', `Bestellnummer: ${result.orderNumber}`))
+      try { window.dispatchEvent(new CustomEvent('zyro:purchase', { detail: { orderNumber: String(result.orderNumber || ''), value: Number(result.totalPriceCents || 0) / 100 } })) } catch { /* Messung ist optional */ }
       if (preorderItems.length) {
         success.append(el('p', 'hint', `Vorbestellung: ${preorderItems.map((item) => `${item.productName}${item.expectedDeliveryDate ? ` (voraussichtliche Lieferung ${formatDate(item.expectedDeliveryDate)})` : ''}`).join(', ')}`))
       }
@@ -825,6 +876,137 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     } catch (error) {
       notice(message, error.message)
       button.disabled = false
+    }
+  }
+
+  const buildOrderPayload = (form) => {
+    const data = new FormData(form)
+    return {
+      website: data.get('website'),
+      name: data.get('name'),
+      company: data.get('company'),
+      email: data.get('email'),
+      address: data.get('address'),
+      postalCode: data.get('postalCode'),
+      city: data.get('city'),
+      phone: data.get('phone'),
+      billingEmail: data.get('billingEmail'),
+      billingCompany: data.get('billingCompany'),
+      billingAddress: data.get('billingAddress'),
+      billingPostalCode: data.get('billingPostalCode'),
+      billingCity: data.get('billingCity'),
+      vatId: data.get('vatId'),
+      note: data.get('note'),
+      paymentMethod: data.get('payment') || 'vorkasse',
+      privacyNoticeAcknowledged: data.get('privacy') === 'on',
+      businessPricingActive: shop.businessPricing?.active === true,
+      businessPrices: shop.businessPricing?.prices || {},
+      discountCode: appliedDiscount?.subtotalCents === cartTotals().subtotal ? appliedDiscount.code : '',
+      items: shop.businessPricing?.active
+        ? Object.entries(cart).map(([productId, quantity]) => {
+          if (!Number.isSafeInteger(quantity) || quantity < 24 || quantity % 24 !== 0) {
+            throw new Error('Geschäftskunden können nur volle 24er-Trays bestellen. Bitte den Warenkorb korrigieren.')
+          }
+          return { productId, trays: quantity / 24 }
+        })
+        : Object.entries(cart).map(([productId, quantity]) => ({ productId, quantity })),
+    }
+  }
+
+  const submitPaypalOrder = async (form) => {
+    const token = sessionStorage.getItem(TOKEN_KEY)
+    return api('/api/shop/order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(buildOrderPayload(form)),
+    })
+  }
+
+  let paypalSdkLoading = null
+  let paypalButtonsRendered = false
+  const loadPaypalSdk = () => {
+    if (window.paypal?.Buttons) return Promise.resolve(window.paypal)
+    if (!paypalSdkLoading) {
+      paypalSdkLoading = new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        const query = new URLSearchParams({
+          'client-id': shop.paypalClientId,
+          currency: 'EUR',
+          intent: 'capture',
+          components: 'buttons',
+          locale: 'de_DE',
+        })
+        script.src = `https://www.paypal.com/sdk/js?${query}`
+        script.async = true
+        script.onload = () => window.paypal?.Buttons ? resolve(window.paypal) : reject(new Error('PayPal konnte nicht geladen werden.'))
+        script.onerror = () => reject(new Error('PayPal konnte nicht geladen werden. Bitte prüfe deine Internetverbindung.'))
+        document.head.append(script)
+      }).catch((error) => {
+        paypalSdkLoading = null
+        throw error
+      })
+    }
+    return paypalSdkLoading
+  }
+
+  const showPaypalOrderSuccess = (orderNumber, confirmationEmailSent) => {
+    try { window.dispatchEvent(new CustomEvent('zyro:purchase', { detail: { orderNumber: String(orderNumber || ''), value: null } })) } catch { /* Messung ist optional */ }
+    cart = {}
+    appliedDiscount = null
+    saveCart()
+    renderCart()
+    const panel = $('#checkout-panel')
+    panel.replaceChildren()
+    const success = el('div', 'success')
+    success.append(
+      el('h3', '', 'Danke für deine Bestellung! 🎉'),
+      el('p', '', `Bestellnummer: ${orderNumber}`),
+      el('p', '', 'Deine PayPal-Zahlung wurde bestätigt.'),
+      el('p', 'hint', confirmationEmailSent ? 'Eine Bestätigung ist per E-Mail unterwegs. Status und Rechnung findest du unter „Mein Konto“.' : 'Die Bestellbestätigung wird noch vorbereitet. Status und Rechnung findest du unter „Mein Konto“.'),
+    )
+    const close = el('button', 'primary', 'Schließen')
+    close.type = 'button'
+    close.addEventListener('click', () => location.reload())
+    success.append(close)
+    panel.append(success)
+  }
+
+  const renderPaypalButtons = async () => {
+    if (!shop.paypalClientId || paypalButtonsRendered) return
+    try {
+      const paypal = await loadPaypalSdk()
+      await paypal.Buttons({
+        style: { layout: 'vertical', shape: 'rect', label: 'paypal', height: 48 },
+        onClick: (_data, actions) => $('#checkout-form').reportValidity() ? actions.resolve() : actions.reject(),
+        createOrder: async () => {
+          notice($('#checkout-message'), '')
+          const result = await submitPaypalOrder($('#checkout-form'))
+          if (!result.paypalOrderId) throw new Error('PayPal-Bestellung konnte nicht gestartet werden.')
+          return result.paypalOrderId
+        },
+        onApprove: async (data) => {
+          try {
+            notice($('#checkout-message'), 'PayPal-Zahlung wird bestätigt …')
+            const result = await api('/api/shop/paypal/capture', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ paypalOrderId: data.orderID }),
+            })
+            showPaypalOrderSuccess(result.orderNumber, result.confirmationEmailSent)
+            notice($('#shop-message'), `PayPal-Zahlung für Bestellung ${result.orderNumber} wurde bestätigt.`)
+          } catch (error) {
+            notice($('#checkout-message'), error.message || 'Die PayPal-Zahlung konnte nicht bestätigt werden. Bitte kontaktiere den Support.')
+          }
+        },
+        onCancel: () => notice($('#checkout-message'), 'PayPal-Zahlung abgebrochen. Du kannst es erneut versuchen.'),
+        onError: (error) => {
+          console.error('PayPal Checkout fehlgeschlagen:', error)
+          notice($('#checkout-message'), 'PayPal ist gerade nicht verfügbar. Bitte versuche es erneut oder wähle eine andere Zahlungsart.')
+        },
+      }).render('#paypal-button-container')
+      paypalButtonsRendered = true
+    } catch (error) {
+      notice($('#checkout-message'), error.message || 'PayPal konnte nicht geladen werden.')
     }
   }
 
@@ -1078,17 +1260,50 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
       const message = $('#shop-message')
       if (shop.products.length === 0) notice(message, 'Aktuell ist kein Artikel im Shop verfügbar.')
       else show(message, false)
-      if (!shop.paymentMethods.includes('vorkasse') && !shop.paymentMethods.includes('stripe')) notice($('#shop-message'), 'Bestellen ist aktuell noch nicht freigeschaltet.')
-      const methods = ['stripe', 'vorkasse'].filter((method) => shop.paymentMethods.includes(method))
+      if (!['vorkasse', 'stripe', 'paypal'].some((method) => shop.paymentMethods.includes(method))) notice($('#shop-message'), 'Bestellen ist aktuell noch nicht freigeschaltet.')
+      const methods = ['stripe', 'paypal', 'vorkasse'].filter((method) => shop.paymentMethods.includes(method))
       for (const method of ['stripe', 'vorkasse']) show($(`#pay-${method}`), methods.includes(method))
+      const paypalAvailable = methods.includes('paypal') && Boolean(shop.paypalClientId)
+      const paypalOption = $('#pay-paypal')
+      const paypalRadio = paypalOption.querySelector('input')
+      paypalRadio.disabled = !paypalAvailable
+      paypalOption.classList.toggle('is-unavailable', !paypalAvailable)
+      show($('#paypal-status-note'), !paypalAvailable)
+      $('#paypal-status-note').textContent = paypalAvailable
+        ? ''
+        : 'Derzeit nicht verfügbar – PayPal-Zugangsdaten fehlen.'
+      show(paypalOption)
       const firstRadio = document.querySelector(`input[name="payment"][value="${methods[0]}"]`)
       if (firstRadio) firstRadio.checked = true
       const params = new URLSearchParams(location.search)
       if (params.get('paid')) {
+        try { window.dispatchEvent(new CustomEvent('zyro:purchase', { detail: { orderNumber: String(params.get('paid') || ''), value: null } })) } catch { /* Messung ist optional */ }
+
         cart = {}
         saveCart()
         notice($('#shop-message'), `Danke! Deine Zahlung wird bestätigt. Bestellnummer: ${params.get('paid')}. Die Bestätigung kommt per E-Mail.`)
       }
+      else if (params.get('paypal') === 'approved' && params.get('token')) {
+        notice($('#shop-message'), 'PayPal-Zahlung wird sicher bestätigt …')
+        try {
+          const result = await api('/api/shop/paypal/capture', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paypalOrderId: params.get('token') }),
+          })
+          cart = {}
+          saveCart()
+          notice($('#shop-message'), `Danke! Deine PayPal-Zahlung für Bestellung ${result.orderNumber} wurde bestätigt.${result.confirmationEmailSent ? ' Die Bestätigung kommt per E-Mail.' : ' Deine Bestellbestätigung wird noch vorbereitet.'}`)
+          params.delete('paypal')
+          params.delete('token')
+          params.delete('PayerID')
+          const remainingQuery = params.toString()
+          history.replaceState(null, '', `${location.pathname}${remainingQuery ? `?${remainingQuery}` : ''}${location.hash}`)
+        } catch (error) {
+          notice($('#shop-message'), error.message || 'Die PayPal-Zahlung konnte noch nicht bestätigt werden. Bitte lade die Seite erneut oder kontaktiere den Support.')
+        }
+      }
+      else if (params.get('paypal') === 'cancelled') notice($('#shop-message'), 'PayPal-Zahlung abgebrochen. Dein Warenkorb ist noch da.')
       else if (params.get('cancelled')) notice($('#shop-message'), 'Zahlung abgebrochen. Dein Warenkorb ist noch da.')
       renderProducts()
       const validIds = new Set(shop.products.map((product) => product.id))
@@ -1110,18 +1325,30 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     })
     document.querySelectorAll('[data-close]').forEach((button) => button.addEventListener('click', closePanels))
     $('#scrim').addEventListener('click', closePanels)
+    const updatePaymentButton = () => {
+      const selectedPayment = document.querySelector('input[name="payment"]:checked')?.value
+      const usePaypal = selectedPayment === 'paypal' && Boolean(shop.paypalClientId)
+      show($('#submit-order'), !usePaypal)
+      show($('#paypal-button-container'), usePaypal)
+      $('#submit-order').textContent = selectedPayment === 'stripe'
+        ? 'Weiter zur sicheren Online-Zahlung'
+        : 'Zahlungspflichtig bestellen'
+      if (usePaypal && !$('#checkout-panel').hidden) renderPaypalButtons()
+    }
+    document.querySelectorAll('input[name="payment"]').forEach((input) => input.addEventListener('change', updatePaymentButton))
+    updatePaymentButton()
     document.addEventListener('keydown', (event) => {
-      const accountPanel = $('#account-panel')
       if (event.key === 'Escape') {
         closePanels()
         return
       }
-      if (event.key !== 'Tab' || accountPanel.hidden) return
-      const focusable = [...accountPanel.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary, a[href]')]
+      const dialogPanel = [$('#account-panel'), $('#product-panel'), $('#checkout-panel')].find((panel) => !panel.hidden)
+      if (event.key !== 'Tab' || !dialogPanel) return
+      const focusable = [...dialogPanel.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary, a[href]')]
         .filter((element) => !element.closest('[hidden]'))
       if (!focusable.length) {
         event.preventDefault()
-        accountPanel.focus()
+        dialogPanel.focus()
         return
       }
       const first = focusable[0]
@@ -1135,10 +1362,10 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
       }
     })
     $('#to-checkout').addEventListener('click', () => {
-      show($('#checkout-form'))
-      show($('#to-checkout'), false)
-      $('#checkout-form').elements.name.focus()
+      openPanel('#checkout-panel')
+      updatePaymentButton()
     })
+    $('#back-to-cart').addEventListener('click', () => openPanel('#cart-panel'))
     $('#discount-form').addEventListener('submit', (event) => {
       event.preventDefault()
       applyDiscount()

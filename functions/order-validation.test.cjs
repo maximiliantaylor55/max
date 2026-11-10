@@ -177,6 +177,11 @@ test('rejects a payment method that is not configured', () => {
   assert.throws(() => validatePublicOrder({ ...validOrder, paymentMethod: 'paypal' }, undefined, ['vorkasse']))
 })
 
+test('accepts PayPal only when the server lists it as an available payment method', () => {
+  const result = validatePublicOrder({ ...validOrder, paymentMethod: 'paypal' }, undefined, ['paypal'])
+  assert.equal(result.paymentMethod, 'paypal')
+})
+
 test('calculates shipping from bottle and carton weight, rounding up each started kilogram', () => {
   const catalog = new Map([
     ['pfirsich-maracuja', { name: 'ZYRO Pfirsich Maracuja', cratePriceCents: 2400, unitWeightGrams: 500 }],
@@ -401,6 +406,30 @@ test('builds a branded confirmation email with packaging details and escaped cus
   assert.doesNotMatch(email.html, /<Max & Co>/)
   assert.match(email.text, /1 24er-Trays · 1 Einzeldosen/)
   assert.match(email.text, /DE1234567890/)
+})
+
+test('PayPal payment confirmations do not show bank transfer instructions', () => {
+  const email = buildOrderConfirmationEmail({
+    order: {
+      name: 'Max Mustermann',
+      paymentMethod: 'paypal',
+      paymentStatus: 'paid',
+      subtotalCents: 1000,
+      shippingPriceCents: 0,
+      vatRate: 19,
+      vatCents: 160,
+      totalPriceCents: 1000,
+      pricesIncludeVat: true,
+      items: [],
+    },
+    orderNumber: 'ZY-WEB-20261108-ABC123',
+    paymentInfo: { accountHolder: 'ZYRO GmbH', iban: 'DE1234567890', reference: 'ZY-WEB-20261108-ABC123' },
+  })
+
+  assert.match(email.text, /PayPal-Zahlung erhalten/)
+  assert.match(email.html, /PayPal-Zahlung erhalten/)
+  assert.doesNotMatch(email.text, /Verwendungszweck|IBAN|Empfänger/)
+  assert.doesNotMatch(email.html, /Verwendungszweck|IBAN|Empfänger/)
 })
 
 test('shows preorder and expected delivery date in the confirmation email', () => {

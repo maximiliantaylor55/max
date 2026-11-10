@@ -1,6 +1,6 @@
 :root {
   color-scheme: light;
-  font-family: 'DM Sans', sans-serif;
+  font-family: 'Inter', sans-serif;
   color: #172d28;
   background: #f8f6ef;
   font-synthesis: none;
@@ -12,7 +12,7 @@
   --orange: #f47745;
   --plum: #642f48;
   --line: rgba(23, 45, 40, 0.16);
-  --display: 'Space Grotesk', sans-serif;
+  --display: 'Inter Display', sans-serif;
   --gutter: clamp(22px, 6.5vw, 100px);
 }
 
@@ -37,7 +37,7 @@ body,
 button,
 input,
 textarea {
-  font-family: 'DM Sans', sans-serif;
+  font-family: 'Inter', sans-serif;
 }
 
 button,
@@ -103,13 +103,13 @@ img {
   font-size: 2rem;
   font-weight: 700;
   line-height: 1;
-  letter-spacing: -0.07em;
+  letter-spacing: -0.035em;
 }
 
 .wordmark span {
   display: inline-block;
   margin-left: 3px;
-  font-family: 'DM Sans', sans-serif;
+  font-family: 'Inter', sans-serif;
   font-size: 0.54rem;
   letter-spacing: 0;
   vertical-align: top;
@@ -244,7 +244,7 @@ p {
   font-size: clamp(5.4rem, 9.3vw, 9.8rem);
   font-weight: 700;
   line-height: 0.76;
-  letter-spacing: -0.095em;
+  letter-spacing: -0.048em;
 }
 
 .hero h1 em,
@@ -446,7 +446,7 @@ p {
   font-size: clamp(3.6rem, 7.2vw, 7.4rem);
   font-weight: 700;
   line-height: 0.82;
-  letter-spacing: -0.085em;
+  letter-spacing: -0.043em;
 }
 
 .product-copy h2 span {
@@ -481,7 +481,7 @@ p {
   font-family: var(--display);
   font-size: clamp(1.8rem, 3.5vw, 3rem);
   line-height: 1;
-  letter-spacing: -0.06em;
+  letter-spacing: -0.03em;
 }
 
 .product-facts strong span {
@@ -632,7 +632,7 @@ p {
   font-size: clamp(3.8rem, 7.3vw, 7.3rem);
   font-weight: 700;
   line-height: 0.82;
-  letter-spacing: -0.085em;
+  letter-spacing: -0.043em;
 }
 
 .contact-copy h2 span {
@@ -777,7 +777,7 @@ p {
   font-size: clamp(1.8rem, 3vw, 2.7rem);
   font-weight: 700;
   line-height: 0.92;
-  letter-spacing: -0.06em;
+  letter-spacing: -0.03em;
 }
 
 .contact-strip p span {
@@ -1233,7 +1233,7 @@ p {
   --orange: #ff835e;
   --plum: #59347c;
   --line: rgba(32, 23, 46, 0.13);
-  --display: 'Manrope', sans-serif;
+  --display: 'Inter', sans-serif;
 }
 
 .site-header {
@@ -1301,7 +1301,7 @@ p {
 
 .hero h1 {
   font-weight: 800;
-  letter-spacing: -0.1em;
+  letter-spacing: -0.05em;
 }
 
 .hero h1 em {
@@ -1468,7 +1468,7 @@ p {
   font-size: clamp(2.8rem, 6.3vw, 6rem);
   font-weight: 800;
   line-height: 0.88;
-  letter-spacing: -0.085em;
+  letter-spacing: -0.043em;
 }
 
 .spot-heading h2 span {
@@ -1595,7 +1595,7 @@ p {
   font-size: clamp(2.7rem, 7vw, 7rem);
   font-weight: 800;
   line-height: 0.84;
-  letter-spacing: -0.09em;
+  letter-spacing: -0.045em;
 }
 
 .spot-copy em {
@@ -2159,7 +2159,7 @@ p {
   --orange: #e3a45c;
   --plum: #754a2d;
   --line: rgba(48, 34, 22, 0.16);
-  --display: 'Manrope', sans-serif;
+  --display: 'Inter', sans-serif;
   --gutter: clamp(22px, 7vw, 110px);
   color: var(--ink);
   background: var(--paper);
@@ -2275,7 +2275,7 @@ body {
   font-size: clamp(4.3rem, 8.8vw, 9rem);
   font-weight: 800;
   line-height: 0.87;
-  letter-spacing: -0.09em;
+  letter-spacing: -0.045em;
   text-wrap: balance;
 }
 
@@ -2440,7 +2440,7 @@ body {
 .trade-copy h2,
 .brand-band h2 {
   font-size: clamp(3.5rem, 6.7vw, 7rem);
-  letter-spacing: -0.085em;
+  letter-spacing: -0.043em;
 }
 
 .product-copy h2 span {
@@ -2827,7 +2827,7 @@ body {
   color: var(--ink);
   font-size: clamp(3.2rem, 7.8vw, 6.8rem);
   line-height: 0.88;
-  letter-spacing: -0.09em;
+  letter-spacing: -0.045em;
 }
 
 .hero h1 em {

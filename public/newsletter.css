@@ -1,0 +1,36 @@
+/* ZYRO Newsletter-Anmeldung auf der Website */
+.zyro-newsletter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+  gap: clamp(28px, 5vw, 72px);
+  align-items: center;
+  margin: clamp(24px, 4vw, 48px) auto;
+  width: min(100% - 40px, 1180px);
+  padding: clamp(28px, 5vw, 64px);
+  border-radius: 32px;
+  background: linear-gradient(135deg, #fff1dc 0%, #ffe3cf 55%, #f6f7d9 100%);
+  color: var(--ink, #172d28);
+}
+.zyro-newsletter .eyebrow { margin: 0 0 10px; }
+.zyro-newsletter h2 { margin: 0 0 14px; font-family: var(--display, Inter, sans-serif); font-size: clamp(2.2rem, 5vw, 4rem); line-height: 0.95; font-weight: 800; letter-spacing: -0.02em; }
+.zyro-newsletter h2 span { color: #f47745; }
+.zyro-newsletter-copy p:last-child { margin: 0; max-width: 32em; font-size: 1.05rem; line-height: 1.6; opacity: 0.85; }
+.zyro-newsletter-form { display: grid; gap: 14px; padding: clamp(20px, 3vw, 30px); border-radius: 24px; background: rgba(255, 255, 255, 0.78); box-shadow: 0 14px 40px rgba(23, 45, 40, 0.08); }
+.zyro-newsletter-fields { display: grid; grid-template-columns: 1fr 1.4fr; gap: 12px; align-items: end; }
+.zyro-newsletter-form label { display: grid; gap: 6px; font-weight: 700; font-size: 0.9rem; }
+.zyro-newsletter-form label small { font-weight: 400; opacity: 0.7; }
+.zyro-newsletter-form input:not([type='checkbox']) { width: 100%; padding: 14px 16px; border-radius: 14px; border: 1px solid rgba(23, 45, 40, 0.18); background: #fff; font: inherit; font-weight: 400; color: inherit; }
+.zyro-newsletter-form input:not([type='checkbox']):focus { outline: none; border-color: #f47745; box-shadow: 0 0 0 3px rgba(244, 119, 69, 0.2); }
+.zyro-newsletter-consent { display: flex !important; align-items: flex-start; gap: 10px; font-weight: 400 !important; font-size: 0.85rem !important; line-height: 1.5; }
+.zyro-newsletter-consent input { margin-top: 3px; width: 18px; height: 18px; accent-color: #f47745; flex: none; }
+.zyro-newsletter-consent a { color: inherit; }
+.zyro-newsletter-submit { display: inline-flex; justify-content: space-between; align-items: center; gap: 16px; padding: 16px 22px; border: 0; border-radius: 999px; background: #172d28; color: #fff8eb; font: 700 1rem Inter, sans-serif; cursor: pointer; transition: transform 0.15s ease, background 0.15s ease; }
+.zyro-newsletter-submit:hover { background: #f47745; transform: translateY(-1px); }
+.zyro-newsletter-submit:disabled { opacity: 0.6; cursor: wait; transform: none; }
+.zyro-newsletter-status { margin: 0; min-height: 1.4em; font-weight: 600; }
+.zyro-newsletter-status.is-success { color: #2f7d4f; }
+.zyro-newsletter-status.is-error { color: #b42318; }
+@media (max-width: 820px) {
+  .zyro-newsletter { grid-template-columns: 1fr; }
+  .zyro-newsletter-fields { grid-template-columns: 1fr; }
+}

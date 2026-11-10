@@ -13,8 +13,9 @@ export const createSalesInvoiceFinanceEntry = (invoice, { id, paidAt = '' }) => 
   if (!invoice || invoice.kind !== 'rechnung' || invoice.status !== 'Bezahlt') {
     throw new Error('Nur bezahlte Rechnungen können für die Finanzbuchhaltung vorbereitet werden.')
   }
-  if (id === undefined || id === null || !isValidDate(invoice.documentDate)) {
-    throw new Error('Rechnungsnummer oder Belegdatum fehlt.')
+  if (id === undefined || id === null || !String(invoice.id || '').trim()
+    || !String(invoice.number || '').trim() || !isValidDate(invoice.documentDate)) {
+    throw new Error('Rechnungs-ID, Rechnungsnummer oder Belegdatum fehlt.')
   }
   if (paidAt !== '' && !isValidDate(paidAt)) throw new Error('Das Zahlungsdatum ist ungültig.')
 
@@ -53,6 +54,63 @@ export const createSalesInvoiceFinanceEntry = (invoice, { id, paidAt = '' }) => 
   }
   entry.accountNumber = getSkr03AccountSuggestion(entry)
   return entry
+}
+
+export const reconcilePaidSalesInvoices = (invoices, financeEntries, createId) => {
+  let entries = Array.isArray(financeEntries) ? financeEntries : []
+  let changed = false
+  const issues = []
+  const invoicesToReconcile = Array.isArray(invoices) ? invoices : []
+
+  for (const invoice of invoicesToReconcile) {
+    if (invoice?.kind !== 'rechnung' || invoice.status !== 'Bezahlt') continue
+    const invoiceId = String(invoice.id || '').trim()
+    if (!invoiceId) {
+      issues.push(`Rechnung ${invoice.number || '(ohne Nummer)'} hat keine gültige ID.`)
+      continue
+    }
+    if (entries.some((entry) => String(entry.sourceDocumentId || '') === invoiceId)) continue
+    if (!isValidDate(invoice.paidAt)) {
+      issues.push(`Rechnung ${invoice.number || invoiceId}: Zahlungsdatum fehlt; sie wurde nicht automatisch gebucht.`)
+      continue
+    }
+
+    let expectedEntry
+    try {
+      expectedEntry = createSalesInvoiceFinanceEntry(invoice, { id: createId(), paidAt: invoice.paidAt })
+    } catch (error) {
+      issues.push(`Rechnung ${invoice.number || invoiceId}: ${error.message}`)
+      continue
+    }
+
+    const existingByNumber = entries.find((entry) => (
+      entry.type === 'income'
+      && String(entry.documentNumber || '').trim() === expectedEntry.documentNumber
+    ))
+    if (existingByNumber) {
+      if (existingByNumber.sourceDocumentId
+        && String(existingByNumber.sourceDocumentId) !== invoiceId) {
+        issues.push(`Rechnung ${invoice.number || invoiceId}: Rechnungsnummer ist bereits mit einer anderen Rechnung verknüpft.`)
+        continue
+      }
+      if (existingByNumber.grossCents !== expectedEntry.grossCents
+        || Number(existingByNumber.vatRate) !== expectedEntry.vatRate
+        || existingByNumber.date !== expectedEntry.date) {
+        issues.push(`Rechnung ${invoice.number || invoiceId}: vorhandene Buchung hat abweichende Beträge und wurde nicht automatisch verknüpft.`)
+        continue
+      }
+      entries = entries.map((entry) => entry.id === existingByNumber.id
+        ? { ...entry, sourceDocumentId: invoiceId }
+        : entry)
+      changed = true
+      continue
+    }
+
+    entries = [expectedEntry, ...entries]
+    changed = true
+  }
+
+  return { entries: changed ? entries : financeEntries, issues }
 }
 
 export const createPurchaseFinanceEntry = (order, { id, paidAt = '' }) => {
