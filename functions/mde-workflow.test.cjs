@@ -103,11 +103,16 @@ test('validates DPD and freight shipments before marking an order shipped', () =
   assert.match(dpdOrder.trackingToken, /^[a-f0-9]{64}$/)
   assert.equal(dpdOrder.shipmentNotificationStatus, 'pending')
 
+  const dhlOrder = { ...order, status: 'Verpackt' }
+  validateShipment({ document: dhlOrder, carrier: 'DHL', trackingNumber: '00340434123456789012' })
+  assert.equal(dhlOrder.carrierName, 'DHL')
+  assert.equal(dhlOrder.status, 'Versendet')
+
   assert.throws(() => validateShipment({
     document: { ...order, status: 'Verpackt' },
-    carrier: 'DHL',
-    trackingNumber: '00340434123456789012',
-  }), /Bitte DPD oder Spedition/)
+    carrier: 'Brieftaube',
+    trackingNumber: '12345',
+  }), /Bitte einen Versanddienst/)
 
   assert.throws(() => validateShipment({
     document: { ...order, status: 'Verpackt' },
@@ -148,4 +153,21 @@ test('returns only a shipped order summary to the holder of its unguessable trac
   assert.equal(getPublicShipment({ documents: [shippedOrder], token: '0'.repeat(64) }), null)
   assert.equal(getPublicShipment({ documents: [{ ...shippedOrder, status: 'Verpackt' }], token: shippedOrder.trackingToken }), null)
   assert.equal(getPublicShipment({ documents: [shippedOrder], token: 'invalid' }), null)
+})
+
+test('allows direct shipping of an open order without MDE scans', () => {
+  const products = [{ id: 'p1', name: 'Pfirsich-Maracuja', availableBottles: 48 }]
+  const openOrder = { kind: 'kundenauftrag', status: 'Offen', recipientEmail: 'kunde@example.com', items: [{ productId: 'p1', quantity: 24 }] }
+  const lines = validateMdePacking({ document: openOrder, products, actorId: 'x', direct: true })
+  assert.equal(lines[0].quantity, 24)
+  assert.throws(() => validateMdePacking({ document: { ...openOrder, status: 'Storniert' }, products, actorId: 'x', direct: true }), /storniert/)
+  assert.throws(() => validateMdePacking({ document: { ...openOrder, items: [{ productId: 'p1', quantity: 99 }] }, products, actorId: 'x', direct: true }), /reicht nicht/)
+  assert.throws(() => validateMdePacking({ document: openOrder, products, actorId: 'x' }), /scanne alle Artikel/)
+})
+
+test('shipping lines are never required for scanning', () => {
+  const { isShippingItem } = require('./mde-workflow.cjs')
+  assert.equal(isShippingItem({ isShipping: true }), true)
+  assert.equal(isShippingItem({ productCategory: 'Versand' }), true)
+  assert.equal(isShippingItem({ productCategory: 'Limonade' }), false)
 })

@@ -4,13 +4,23 @@
       "source": "functions",
       "codebase": "default",
       "runtime": "nodejs22",
-      "ignore": ["node_modules", ".git", "firebase-debug.log", "firebase-debug.*.log"]
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log"
+      ]
     },
     {
       "source": "call-functions",
       "codebase": "call-relay",
       "runtime": "nodejs24",
-      "ignore": ["node_modules", ".git", "firebase-debug.log", "firebase-debug.*.log"]
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log"
+      ]
     }
   ],
   "firestore": {
@@ -18,7 +28,11 @@
   },
   "hosting": {
     "public": "public",
-    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
     "rewrites": [
       {
         "source": "/api/inquiry",
@@ -45,6 +59,13 @@
         "source": "/api/management/newsletter",
         "function": {
           "functionId": "newsletterAdmin",
+          "region": "europe-west3"
+        }
+      },
+      {
+        "source": "/api/management/mailbox",
+        "function": {
+          "functionId": "manageMailbox",
           "region": "europe-west3"
         }
       },
@@ -105,6 +126,13 @@
         }
       },
       {
+        "source": "/api/management/sevdesk",
+        "function": {
+          "functionId": "sevdeskSync",
+          "region": "europe-west3"
+        }
+      },
+      {
         "source": "/api/management/mde",
         "function": {
           "functionId": "webAppMde",
@@ -132,126 +160,322 @@
           "region": "europe-west3"
         }
       },
-      { "source": "/shop", "destination": "/brand.html" },
-      { "source": "/bewertung", "destination": "/bewertung.html" },
+      {
+        "source": "/shop",
+        "destination": "/brand.html"
+      },
+      {
+        "source": "/bewertung",
+        "destination": "/bewertung.html"
+      },
       {
         "source": "/api/stripe/webhook",
-        "function": { "functionId": "stripeWebhook", "region": "europe-west3" }
+        "function": {
+          "functionId": "stripeWebhook",
+          "region": "europe-west3"
+        }
       },
       {
         "source": "/api/paypal/webhook",
-        "function": { "functionId": "paypalWebhook", "region": "europe-west3" }
+        "function": {
+          "functionId": "paypalWebhook",
+          "region": "europe-west3"
+        }
       },
       {
         "source": "/api/shop/paypal/capture",
-        "function": { "functionId": "capturePaypalOrder", "region": "europe-west3" }
+        "function": {
+          "functionId": "capturePaypalOrder",
+          "region": "europe-west3"
+        }
       },
       {
         "source": "/api/shop/order",
-        "function": { "functionId": "submitPublicOrder", "region": "europe-west3" }
+        "function": {
+          "functionId": "submitPublicOrder",
+          "region": "europe-west3"
+        }
       },
       {
         "source": "/api/shop",
-        "function": { "functionId": "getPublicShop", "region": "europe-west3" }
+        "function": {
+          "functionId": "getPublicShop",
+          "region": "europe-west3"
+        }
       },
       {
         "source": "/api/portal/register",
-        "function": { "functionId": "registerCustomerPortal", "region": "europe-west3" }
+        "function": {
+          "functionId": "registerCustomerPortal",
+          "region": "europe-west3"
+        }
       },
       {
         "source": "/api/portal/login",
-        "function": { "functionId": "loginCustomerPortal", "region": "europe-west3" }
+        "function": {
+          "functionId": "loginCustomerPortal",
+          "region": "europe-west3"
+        }
       },
       {
         "source": "/api/portal/verify-email",
-        "function": { "functionId": "verifyCustomerPortalEmail", "region": "europe-west3" }
+        "function": {
+          "functionId": "verifyCustomerPortalEmail",
+          "region": "europe-west3"
+        }
       },
       {
         "source": "/api/portal/password-reset/request",
-        "function": { "functionId": "requestCustomerPasswordReset", "region": "europe-west3" }
+        "function": {
+          "functionId": "requestCustomerPasswordReset",
+          "region": "europe-west3"
+        }
       },
       {
         "source": "/api/portal/password-reset",
-        "function": { "functionId": "resetCustomerPortalPassword", "region": "europe-west3" }
+        "function": {
+          "functionId": "resetCustomerPortalPassword",
+          "region": "europe-west3"
+        }
       },
       {
         "source": "/api/portal/code",
-        "function": { "functionId": "requestCustomerPortalCode", "region": "europe-west3" }
+        "function": {
+          "functionId": "requestCustomerPortalCode",
+          "region": "europe-west3"
+        }
       },
       {
         "source": "/api/portal/verify",
-        "function": { "functionId": "verifyCustomerPortalCode", "region": "europe-west3" }
+        "function": {
+          "functionId": "verifyCustomerPortalCode",
+          "region": "europe-west3"
+        }
       },
       {
         "source": "/api/portal/profile",
-        "function": { "functionId": "customerPortalProfile", "region": "europe-west3" }
+        "function": {
+          "functionId": "customerPortalProfile",
+          "region": "europe-west3"
+        }
+      },
+      {
+        "source": "/api/portal/tracking",
+        "function": {
+          "functionId": "customerPortalTracking",
+          "region": "europe-west3"
+        }
       },
       {
         "source": "/api/portal/orders",
-        "function": { "functionId": "listCustomerPortalOrders", "region": "europe-west3" }
+        "function": {
+          "functionId": "listCustomerPortalOrders",
+          "region": "europe-west3"
+        }
       },
       {
         "source": "/api/portal/invoice",
-        "function": { "functionId": "downloadCustomerPortalInvoice", "region": "europe-west3" }
-      },
-      { "source": "/widerruf-erklaeren", "destination": "/widerruf-erklaeren.html" },
-      { "source": "/tracking", "destination": "/tracking.html" },
-      { "source": "/tracking/**", "destination": "/tracking.html" },
-      { "source": "/schichtplan", "destination": "/management/index.html" },
-      { "source": "/schichtplan/**", "destination": "/management/index.html" },
-      { "source": "/management", "destination": "/management/index.html" },
-      { "source": "/management/**", "destination": "/management/index.html" },
-      { "source": "/", "destination": "/brand.html" }
-    ],
-    "headers": [
-      {
-        "source": "/desktop-updates/latest.yml",
-        "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }]
+        "function": {
+          "functionId": "downloadCustomerPortalInvoice",
+          "region": "europe-west3"
+        }
       },
       {
-        "source": "/desktop-updates/macos.html",
-        "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }]
+        "source": "/widerruf-erklaeren",
+        "destination": "/widerruf-erklaeren.html"
       },
       {
-        "source": "/desktop-updates/macos/latest.json",
-        "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }]
+        "source": "/tracking",
+        "destination": "/tracking.html"
       },
       {
-        "source": "/shop{,.html}",
-        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
-      },
-      {
-        "source": "/brand.html",
-        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
-      },
-      {
-        "source": "/",
-        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
-      },
-      {
-        "source": "/bewertung{,.html}",
-        "headers": [{ "key": "Cache-Control", "value": "no-store" }]
-      },
-      {
-        "source": "/management/**",
-        "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }]
+        "source": "/tracking/**",
+        "destination": "/tracking.html"
       },
       {
         "source": "/schichtplan",
-        "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }]
+        "destination": "/management/index.html"
       },
       {
         "source": "/schichtplan/**",
-        "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }]
+        "destination": "/management/index.html"
+      },
+      {
+        "source": "/management",
+        "destination": "/management/index.html"
+      },
+      {
+        "source": "/management/**",
+        "destination": "/management/index.html"
+      },
+      {
+        "source": "/",
+        "destination": "/brand.html"
+      }
+    ],
+    "headers": [
+      {
+        "source": "/widerruf-erklaeren",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "/tracking/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "/tracking",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "/desktop-updates/latest.yml",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, no-store, must-revalidate"
+          }
+        ]
+      },
+      {
+        "source": "/desktop-updates/macos.html",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, no-store, must-revalidate"
+          }
+        ]
+      },
+      {
+        "source": "/desktop-updates/macos/latest.json",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, no-store, must-revalidate"
+          }
+        ]
+      },
+      {
+        "source": "/shop{,.html}",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "/brand.html",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "/",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "/bewertung{,.html}",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-store"
+          }
+        ]
+      },
+      {
+        "source": "/management/**",
+        "headers": [
+          {
+            "key": "X-Robots-Tag",
+            "value": "noindex, nofollow"
+          },
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "**/*.html",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "/management",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "/schichtplan",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "/schichtplan/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
       },
       {
         "source": "**",
         "headers": [
-          { "key": "X-Content-Type-Options", "value": "nosniff" },
-          { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
-          { "key": "X-Frame-Options", "value": "DENY" },
-          { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=()" },
-          { "key": "Content-Security-Policy", "value": "default-src 'self'; img-src 'self' data: blob: https://*.tile.openstreetmap.org https://www.googletagmanager.com https://*.google-analytics.com https://*.analytics.google.com https://*.g.doubleclick.net https://www.google.com https://www.google.de https://*.facebook.com https://*.tiktok.com https://*.tiktokw.us; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' https://www.googletagmanager.com https://connect.facebook.net https://analytics.tiktok.com https://www.paypal.com https://www.paypalobjects.com https://*.paypal.com; connect-src 'self' https://www.googletagmanager.com https://*.google-analytics.com https://*.analytics.google.com https://*.g.doubleclick.net https://www.google.com https://*.facebook.com https://connect.facebook.net https://*.tiktok.com https://*.tiktokw.us https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firebaseinstallations.googleapis.com https://firebasevertexai.googleapis.com https://firebaseremoteconfig.googleapis.com https://generativelanguage.googleapis.com https://europe-west3-zyro-78855.cloudfunctions.net https://photon.komoot.io https://*.paypal.com https://*.paypalobjects.com; frame-src https://*.paypal.com https://www.googletagmanager.com https://*.doubleclick.net https://*.facebook.com https://*.paypalobjects.com; form-action 'self' https://*.paypal.com; base-uri 'self'; object-src 'none'; frame-ancestors 'none'" }
+          {
+            "key": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "key": "Referrer-Policy",
+            "value": "strict-origin-when-cross-origin"
+          },
+          {
+            "key": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "key": "Permissions-Policy",
+            "value": "camera=(), microphone=(), geolocation=()"
+          },
+          {
+            "key": "Content-Security-Policy",
+            "value": "default-src 'self'; img-src 'self' data: blob: https://*.tile.openstreetmap.org https://www.googletagmanager.com https://*.google-analytics.com https://*.analytics.google.com https://*.g.doubleclick.net https://www.google.com https://www.google.de https://*.facebook.com https://*.tiktok.com https://*.tiktokw.us; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' https://www.googletagmanager.com https://connect.facebook.net https://analytics.tiktok.com https://www.paypal.com https://www.paypalobjects.com https://*.paypal.com; connect-src 'self' https://www.googletagmanager.com https://*.google-analytics.com https://*.analytics.google.com https://*.g.doubleclick.net https://www.google.com https://*.facebook.com https://connect.facebook.net https://*.tiktok.com https://*.tiktokw.us https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firebaseinstallations.googleapis.com https://firebasevertexai.googleapis.com https://firebaseremoteconfig.googleapis.com https://generativelanguage.googleapis.com https://europe-west3-zyro-78855.cloudfunctions.net https://photon.komoot.io https://*.paypal.com https://*.paypalobjects.com; frame-src https://*.paypal.com https://www.googletagmanager.com https://*.doubleclick.net https://*.facebook.com https://*.paypalobjects.com; form-action 'self' https://*.paypal.com; base-uri 'self'; object-src 'none'; frame-ancestors 'none'"
+          }
         ]
       }
     ]

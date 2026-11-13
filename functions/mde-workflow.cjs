@@ -39,7 +39,7 @@ const recordMdeScan = ({ document, products, barcode, actor }) => {
     productId: document.productId,
     quantity: document.quantity || 1,
   }])
-    .filter((item) => String(item?.productId ?? '') === String(product.id))
+    .filter((item) => !isShippingItem(item) && String(item?.productId ?? '') === String(product.id))
     .reduce((total, item) => total + Number(item.quantity || 0), 0)
   if (!Number.isSafeInteger(requiredQuantity) || requiredQuantity < 1) {
     throw mdeError(`${product.name || 'Dieses Produkt'} gehört nicht zu diesem Auftrag.`, 409)
@@ -57,10 +57,15 @@ const recordMdeScan = ({ document, products, barcode, actor }) => {
   return { document, product, scannedQuantity: scannedQuantity + 1, requiredQuantity }
 }
 
+// Versandkosten sind eine Rechnungsposition, kein Produkt zum Scannen oder Ausbuchen.
+const isShippingItem = (item) => item?.isShipping === true || String(item?.productCategory || '').trim().toLowerCase() === 'versand'
+
+const SHIPMENT_CARRIERS = ['DPD', 'DHL', 'GLS', 'UPS', 'Hermes', 'Spedition']
+
 const validateShipment = ({ document, carrier, carrierName, trackingNumber, trackingUrl }) => {
   if (!document || document.kind !== 'kundenauftrag') throw mdeError('Kundenauftrag wurde in der Cloud nicht gefunden.', 404)
   if (!['Verpackt', 'Versendet'].includes(document.status)) throw mdeError('Nur verpackte Aufträge können versendet werden.', 409)
-  if (!['DPD', 'Spedition'].includes(carrier)) throw mdeError('Bitte DPD oder Spedition als Versanddienst wählen.')
+  if (!SHIPMENT_CARRIERS.includes(carrier)) throw mdeError('Bitte einen Versanddienst auswählen.')
   const normalizedTrackingNumber = String(trackingNumber || '').trim()
   const normalizedCarrierName = String(carrierName || '').trim()
   const normalizedTrackingUrl = String(trackingUrl || '').trim()
@@ -77,12 +82,13 @@ const validateShipment = ({ document, carrier, carrierName, trackingNumber, trac
     }
     if (parsedUrl.protocol !== 'https:') throw mdeError('Tracking-Adressen müssen mit https:// beginnen.')
   }
+  const resolvedCarrierName = carrier === 'Spedition' ? normalizedCarrierName : carrier
   const shipmentChanged = document.carrier !== carrier
-    || document.carrierName !== (carrier === 'DPD' ? 'DPD' : normalizedCarrierName)
+    || document.carrierName !== resolvedCarrierName
     || document.trackingNumber !== normalizedTrackingNumber
     || document.trackingUrl !== normalizedTrackingUrl
   document.carrier = carrier
-  document.carrierName = carrier === 'DPD' ? 'DPD' : normalizedCarrierName
+  document.carrierName = resolvedCarrierName
   document.trackingNumber = normalizedTrackingNumber
   document.trackingUrl = normalizedTrackingUrl
   document.trackingToken ||= crypto.randomBytes(32).toString('hex')
@@ -122,10 +128,17 @@ const getPublicShipment = ({ documents, token }) => {
   }
 }
 
-const validateMdePacking = ({ document, products, actorId }) => {
-  if (!document || document.kind !== 'kundenauftrag') throw mdeError('Kundenauftrag wurde in der Cloud nicht gefunden.', 404)
+const DIRECT_SHIPPABLE_STATUSES = ['Offen', 'Bestätigt', 'In Produktion', 'Kommissionierung']
+
+const validateMdePacking = ({ document, products, actorId, direct = false }) => {
+  if (!document || document.kind !== 'kundenauftrag') throw mdeError('Kundenauftrag wurde in der Cloud nicht gefunden. Falls er gerade erst angelegt wurde, kurz warten und erneut versuchen.', 404)
   if (document.status === 'Verpackt') throw mdeError('Dieser Auftrag wurde bereits verpackt.', 409)
-  if (document.status !== 'Kommissionierung' || String(document.pickingUserId) !== String(actorId)) {
+  if (document.status === 'Storniert') throw mdeError('Ein stornierter Auftrag kann nicht versendet werden.', 409)
+  if (direct) {
+    if (!DIRECT_SHIPPABLE_STATUSES.includes(document.status)) {
+      throw mdeError(`Ein Auftrag mit Status „${document.status}“ kann nicht direkt versendet werden.`, 409)
+    }
+  } else if (document.status !== 'Kommissionierung' || String(document.pickingUserId) !== String(actorId)) {
     throw mdeError('Nimm den Auftrag zuerst an und scanne alle Artikel am MDE.', 409)
   }
   if (document.status === 'Storniert') throw mdeError('Ein stornierter Auftrag kann nicht verpackt werden.', 409)
@@ -142,6 +155,7 @@ const validateMdePacking = ({ document, products, actorId }) => {
     quantity: document.quantity || 1,
   }]
   for (const item of items) {
+    if (isShippingItem(item)) continue
     const productId = String(item?.productId || '')
     const quantity = Number(item?.quantity)
     if (!productId || !Number.isSafeInteger(quantity) || quantity < 1) {
@@ -159,7 +173,7 @@ const validateMdePacking = ({ document, products, actorId }) => {
   if ([...scannedQuantities.values()].some((quantity) => !Number.isSafeInteger(quantity) || quantity < 0)) {
     throw mdeError('Gescannte Produktmenge ungültig.')
   }
-  const mismatch = [...new Set([...requiredQuantities.keys(), ...scannedQuantities.keys()])]
+  const mismatch = direct ? undefined : [...new Set([...requiredQuantities.keys(), ...scannedQuantities.keys()])]
     .find((id) => (requiredQuantities.get(id) || 0) !== (scannedQuantities.get(id) || 0))
   if (mismatch !== undefined) {
     const productName = products.find((entry) => String(entry.id) === mismatch)?.name || `Produkt ${mismatch}`
@@ -176,4 +190,5 @@ const validateMdePacking = ({ document, products, actorId }) => {
   })
 }
 
-module.exports = { acceptMdeOrder, getPublicShipment, recordMdeScan, validateMdePacking, validateShipment }
+module.exports = {
+  isShippingItem, DIRECT_SHIPPABLE_STATUSES, SHIPMENT_CARRIERS, acceptMdeOrder, getPublicShipment, recordMdeScan, validateMdePacking, validateShipment }

@@ -2,33 +2,24 @@ const trackingForm = document.querySelector('#tracking-form')
 const trackingInput = document.querySelector('#tracking-token')
 const trackingStatus = document.querySelector('#tracking-status')
 const trackingResult = document.querySelector('#tracking-result')
-const carrierLink = document.querySelector('#carrier-link')
 
-const trackingUrlFor = (tracking) => {
-  if (tracking.trackingUrl) {
-    try {
-      const url = new URL(tracking.trackingUrl)
-      if (url.protocol === 'https:') return url.href
-    } catch {
-      return ''
-    }
-  }
-  if (tracking.carrier === 'DHL' && tracking.trackingNumber) {
-    const url = new URL('https://www.dhl.de/de/privatkunden/dhl-sendungsverfolgung.html')
-    url.searchParams.set('piececode', tracking.trackingNumber)
-    return url.href
-  }
-  if (tracking.carrier === 'DPD' && tracking.trackingNumber) {
-    return `https://tracking.dpd.de/status/de_DE/parcel/${encodeURIComponent(tracking.trackingNumber)}`
-  }
-  return ''
-}
+const refreshButton = document.querySelector('#tracking-refresh')
+const checkedAt = document.querySelector('#tracking-checked-at')
+let currentToken = ''
 
-const showTracking = async (token) => {
-  trackingStatus.hidden = false
+// refresh = true: Prüfung auf Abruf – das bisherige Ergebnis bleibt sichtbar, bis die neue Antwort da ist.
+const showTracking = async (token, { refresh = false } = {}) => {
+  currentToken = token
   trackingStatus.classList.remove('error')
-  trackingStatus.textContent = 'Sendungsdaten werden sicher geladen …'
-  trackingResult.hidden = true
+  if (refresh) {
+    refreshButton.disabled = true
+    refreshButton.textContent = 'Wird bei DPD geprüft …'
+    trackingStatus.hidden = true
+  } else {
+    trackingStatus.hidden = false
+    trackingStatus.textContent = 'Sendungsdaten werden sicher geladen …'
+    trackingResult.hidden = true
+  }
   try {
     const response = await fetch('/api/tracking', {
       method: 'POST',
@@ -47,18 +38,48 @@ const showTracking = async (token) => {
     document.querySelector('#shipped-at').textContent = shippedAt && !Number.isNaN(shippedAt.valueOf())
       ? new Intl.DateTimeFormat('de-DE', { dateStyle: 'long' }).format(shippedAt)
       : '–'
-    const target = trackingUrlFor(tracking)
+    // Fortschritt: Bestellt → Versendet → Unterwegs → Im Zustelldepot → In Zustellung → Zugestellt
+    const steps = document.querySelector('#tracking-steps')
+    steps.replaceChildren()
+    ;(Array.isArray(tracking.phases) ? tracking.phases : []).forEach((label, index) => {
+      const step = document.createElement('li')
+      step.textContent = label
+      if (index < tracking.phase) step.className = 'done'
+      if (index === tracking.phase) {
+        step.className = tracking.delivered ? 'done current' : 'current'
+        step.setAttribute('aria-current', 'step')
+      }
+      steps.append(step)
+    })
+    steps.hidden = !steps.childElementCount
+    document.querySelector('#shipment-status').textContent = tracking.phaseLabel || tracking.status || 'Versendet'
+    const check = document.querySelector('#status-check')
+    check.textContent = tracking.delivered ? '✓' : '→'
+    check.classList.toggle('is-delivered', Boolean(tracking.delivered))
+    const deliveredNote = document.querySelector('#delivered-note')
+    const deliveredAt = tracking.deliveredAt ? new Date(tracking.deliveredAt) : null
+    deliveredNote.hidden = !tracking.delivered
+    deliveredNote.textContent = tracking.delivered
+      ? `Dein Paket wurde zugestellt${deliveredAt && !Number.isNaN(deliveredAt.valueOf()) ? ` – bestätigt am ${new Intl.DateTimeFormat('de-DE', { dateStyle: 'long' }).format(deliveredAt)}` : ''}. Viel Spaß mit ZYRO!`
+      : ''
     const carrierStatus = tracking.carrierStatus
     const statusBox = document.querySelector('#carrier-status')
     const eventList = document.querySelector('#carrier-events')
     eventList.replaceChildren()
-    statusBox.hidden = !carrierStatus
+    statusBox.hidden = false
+    if (!carrierStatus) {
+      document.querySelector('#carrier-status-text').textContent = tracking.delivered
+        ? 'Die Zustellung ist bestätigt.'
+        : `${tracking.carrier || 'Der Versanddienst'} hat noch keinen Status gemeldet. Nach der Übergabe kann das ein paar Stunden dauern.`
+    }
     if (carrierStatus) {
       const when = (value) => {
-        const date = value ? new Date(value) : null
-        return date && !Number.isNaN(date.valueOf()) ? new Intl.DateTimeFormat('de-DE', { dateStyle: 'short', timeStyle: 'short' }).format(date) : ''
+        const text = String(value || '')
+        const date = text ? new Date(text) : null
+        if (/^\d{4}-\d{2}-\d{2}/.test(text) && date && !Number.isNaN(date.valueOf())) return new Intl.DateTimeFormat('de-DE', { dateStyle: 'short', timeStyle: 'short' }).format(date)
+        return text
       }
-      document.querySelector('#shipment-status').textContent = carrierStatus.status || tracking.status || 'Versendet'
+      document.querySelector('#shipment-status').textContent = tracking.phaseLabel || carrierStatus.status || tracking.status || 'Versendet'
       document.querySelector('#carrier-status-text').textContent = [carrierStatus.description, carrierStatus.location, when(carrierStatus.timestamp)].filter(Boolean).join(' · ')
       for (const event of carrierStatus.events || []) {
         const item = document.createElement('li')
@@ -66,15 +87,22 @@ const showTracking = async (token) => {
         eventList.append(item)
       }
     }
-    carrierLink.hidden = !target
-    if (target) carrierLink.href = target
     trackingStatus.hidden = true
     trackingResult.hidden = false
+    checkedAt.textContent = `Zuletzt geprüft: ${new Intl.DateTimeFormat('de-DE', { dateStyle: 'short', timeStyle: 'short' }).format(new Date())} Uhr`
   } catch (error) {
+    trackingStatus.hidden = false
     trackingStatus.textContent = error.message
     trackingStatus.classList.add('error')
+  } finally {
+    refreshButton.disabled = false
+    refreshButton.textContent = 'Status jetzt prüfen'
   }
 }
+
+refreshButton.addEventListener('click', () => {
+  if (currentToken) showTracking(currentToken, { refresh: true })
+})
 
 trackingForm.addEventListener('submit', (event) => {
   event.preventDefault()

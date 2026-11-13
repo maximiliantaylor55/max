@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, net, protocol, safeStorage, session, shell, systemPreferences } = require('electron')
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, protocol, safeStorage, session, shell, systemPreferences } = require('electron')
 const { autoUpdater } = require('electron-updater')
 const crypto = require('node:crypto')
 const fs = require('node:fs/promises')
@@ -13,7 +13,6 @@ const { createCloudSync } = require('./cloud-sync.cjs')
 const { isAllowedInvoiceStatusChange, haveSameInvoiceFields } = require('../functions/invoice-status.cjs')
 const { validateFinanceEntries } = require('../functions/finance-validation.cjs')
 const { validatePurchaseOrders, validateSuppliers } = require('../functions/erp-purchasing.cjs')
-const { validateElsterSetupEntries } = require('../functions/elster-validation.cjs')
 const { validateCompanyDetailsEntries } = require('../functions/company-details.cjs')
 const { validateBottlerDetailsEntries } = require('../functions/bottler-details.cjs')
 const {
@@ -57,7 +56,6 @@ const distDirectory = path.resolve(__dirname, '..', 'dist')
 const geminiKeyPath = path.join(app.getPath('userData'), 'gemini-api-key.bin')
 const openAiKeyPath = path.join(app.getPath('userData'), 'openai-api-key.bin')
 const websiteOrderTokenPath = path.join(app.getPath('userData'), 'website-order-token.bin')
-const elsterSetupPath = path.join(app.getPath('userData'), 'elster-setup.bin')
 const sipgateConfigPath = path.join(app.getPath('userData'), 'sipgate-config.bin')
 const sipSoftphoneConfigPath = path.join(app.getPath('userData'), 'sip-softphone-config.bin')
 const localBusinessDataPath = path.join(app.getPath('userData'), 'business-data.json')
@@ -72,6 +70,7 @@ const sharedDataKeys = new Set([
   'zyro-activation-keys',
   'zyro-products',
   'zyro-recipes',
+  'zyro-raw-materials',
   'zyro-lab-tests',
   'zyro-orders',
   'zyro-sales-documents',
@@ -82,7 +81,7 @@ const sharedDataKeys = new Set([
   'zyro-payment-requests',
   'zyro-payment-settings',
   'zyro-cost-calculations',
-  'zyro-elster-setup',
+  'zyro-contract-jobs',
   'zyro-company-details',
   'zyro-bottler-details',
   'zyro-website-orders',
@@ -315,7 +314,6 @@ const updateBusinessData = (key, value, actor = null) => {
       if (actor?.role !== 'admin') throw new Error('Das Zahlungskonto darf nur von einem Admin verwaltet werden.')
       validatePaymentSettings(value)
     }
-    if (key === 'zyro-elster-setup') validateElsterSetupEntries(previousValue, value, actor)
     if (key === 'zyro-company-details') validateCompanyDetailsEntries(value, actor)
     if (key === 'zyro-bottler-details') validateBottlerDetailsEntries(value, actor)
     data[key] = storedValue
@@ -689,9 +687,9 @@ const startNetworkHost = async (accessCode = '') => {
         const requester = readAuthUsers().find((user) => String(user.id) === userId)
         const snapshot = filterScheduleSnapshot(filterHrSensitiveSnapshot(filterMachinebauSnapshot(filterLabTestSnapshot(filterPaymentDataSnapshot(getDataSnapshot(), requester), requester), requester), requester), requester)
         if (!userCanAccessFinance(requester)) delete snapshot.data['zyro-finance-entries']
-        if (requester?.role !== 'admin') delete snapshot.data['zyro-elster-setup']
         if (requester?.role !== 'admin') delete snapshot.data['zyro-company-details']
         if (requester?.role !== 'admin') delete snapshot.data['zyro-cost-calculations']
+        if (requester?.role !== 'admin') delete snapshot.data['zyro-contract-jobs']
         response.writeHead(200).end(JSON.stringify(snapshot))
         return
       }
@@ -837,9 +835,6 @@ const startNetworkHost = async (accessCode = '') => {
           response.writeHead(401).end(JSON.stringify({ error: 'Anmeldung erforderlich. Bitte erneut anmelden.' }))
           return
         }
-        if (keyMatch[1] === 'zyro-elster-setup' && actor.role !== 'admin') {
-          throw new Error('ELSTER-Einstellungen dürfen nur von einem Admin verwaltet werden.')
-        }
         if (keyMatch[1] === 'zyro-company-details' && actor.role !== 'admin') {
           throw new Error('Firmendaten dürfen nur von einem Admin verwaltet werden.')
         }
@@ -848,6 +843,9 @@ const startNetworkHost = async (accessCode = '') => {
         }
         if (keyMatch[1] === 'zyro-cost-calculations' && actor.role !== 'admin') {
           throw new Error('Kalkulationen dürfen nur von einem Admin verwaltet werden.')
+        }
+        if (keyMatch[1] === 'zyro-contract-jobs' && actor.role !== 'admin') {
+          throw new Error('Lohnherstellung darf nur von einem Admin verwaltet werden.')
         }
         if (keyMatch[1] === 'zyro-payment-settings' && actor.role !== 'admin') {
           throw new Error('Das Zahlungskonto darf nur von einem Admin verwaltet werden.')
@@ -1498,14 +1496,6 @@ ipcMain.on('zyro-data:get', (event, key, sessionToken) => {
         return
       }
     }
-    if (key === 'zyro-elster-setup') {
-      const userId = authSessions.get(String(sessionToken || ''))
-      const requester = readAuthUsers().find((user) => String(user.id) === userId)
-      if (requester?.role !== 'admin') {
-        event.returnValue = { found: false }
-        return
-      }
-    }
     if (key === 'zyro-company-details') {
       const userId = authSessions.get(String(sessionToken || ''))
       const requester = readAuthUsers().find((user) => String(user.id) === userId)
@@ -1514,7 +1504,7 @@ ipcMain.on('zyro-data:get', (event, key, sessionToken) => {
         return
       }
     }
-    if (key === 'zyro-cost-calculations') {
+    if (key === 'zyro-cost-calculations' || key === 'zyro-contract-jobs') {
       const userId = authSessions.get(String(sessionToken || ''))
       const requester = readAuthUsers().find((user) => String(user.id) === userId)
       if (requester?.role !== 'admin') {
@@ -1631,9 +1621,9 @@ ipcMain.handle('zyro-data:set', async (event, key, value, sessionToken) => {
     if (key === 'zyro-hr-sensitive' && !userCanManageHrSensitiveData(requester)) {
       throw new Error('Geschützte Mitarbeiterdaten dürfen nur von Admins verwaltet werden.')
     }
-    if (key === 'zyro-elster-setup' && requester?.role !== 'admin') throw new Error('ELSTER-Einstellungen dürfen nur von einem Admin verwaltet werden.')
     if (key === 'zyro-company-details' && requester?.role !== 'admin') throw new Error('Firmendaten dürfen nur von einem Admin verwaltet werden.')
     if (key === 'zyro-cost-calculations' && requester?.role !== 'admin') throw new Error('Kalkulationen dürfen nur von einem Admin verwaltet werden.')
+    if (key === 'zyro-contract-jobs' && requester?.role !== 'admin') throw new Error('Lohnherstellung darf nur von einem Admin verwaltet werden.')
     if (['zyro-shop-settings', 'zyro-shop-discounts'].includes(key) && requester?.role !== 'admin') {
       throw new Error('Shop-Einstellungen dürfen nur von einem Admin verwaltet werden.')
     }
@@ -1643,7 +1633,7 @@ ipcMain.handle('zyro-data:set', async (event, key, value, sessionToken) => {
         throw new Error('Nur ein Admin am Haupt-PC darf Ticketstatus oder Freigaben ändern.')
       }
     }
-    if (['zyro-products', 'zyro-recipes', 'zyro-orders', 'zyro-sales-documents', 'zyro-finance-entries', 'zyro-website-orders', 'zyro-customers', 'zyro-inventory', 'zyro-stock-movements', 'zyro-archive-documents', 'zyro-qm-documents', 'zyro-delete-requests'].includes(key)
+    if (['zyro-products', 'zyro-recipes', 'zyro-raw-materials', 'zyro-orders', 'zyro-sales-documents', 'zyro-finance-entries', 'zyro-website-orders', 'zyro-customers', 'zyro-inventory', 'zyro-stock-movements', 'zyro-archive-documents', 'zyro-qm-documents', 'zyro-delete-requests'].includes(key)
       && hasRemovedRecords(key, storedValue, value)) {
       const userId = authSessions.get(String(sessionToken || ''))
       const requester = readAuthUsers().find((user) => String(user.id) === userId)
@@ -1683,9 +1673,9 @@ ipcMain.handle('zyro-data:snapshot', async (event, sessionToken) => {
     const requester = readAuthUsers().find((user) => String(user.id) === userId)
     filterScheduleSnapshot(filterHrSensitiveSnapshot(filterMachinebauSnapshot(filterLabTestSnapshot(filterPaymentDataSnapshot(snapshot, requester), requester), requester), requester), requester)
     if (!userCanAccessFinance(requester)) delete snapshot.data['zyro-finance-entries']
-    if (requester?.role !== 'admin') delete snapshot.data['zyro-elster-setup']
     if (requester?.role !== 'admin') delete snapshot.data['zyro-company-details']
     if (requester?.role !== 'admin') delete snapshot.data['zyro-cost-calculations']
+    if (requester?.role !== 'admin') delete snapshot.data['zyro-contract-jobs']
     return { ...snapshot, mode: config.mode || 'local' }
   }
 
@@ -2261,11 +2251,11 @@ const requestMdeCloud = async (event, action, payload, sessionToken) => {
     throw new Error('Du hast keine Berechtigung für MDE-Buchungen.')
   }
   if (user.role !== 'admin' && permissions.includes('verkauf') && !permissions.includes('lager') && !permissions.includes('mde') && !permissions.includes('versand')
-    && action !== 'send-document') {
+    && !['send-document', 'direct-shipment', 'dpd-label', 'carrier-status'].includes(action)) {
     throw new Error('Du hast keine Berechtigung für diese Verkaufsaktion.')
   }
   if (user.role !== 'admin' && permissions.includes('versand') && !permissions.includes('lager') && !permissions.includes('mde')
-    && !permissions.includes('verkauf') && !['shipment', 'delivery-confirm', 'review-request', 'notify-shipment', 'notify'].includes(action)) {
+    && !permissions.includes('verkauf') && !['shipment', 'manual-shipment', 'direct-shipment', 'dpd-label', 'carrier-status', 'delivery-confirm', 'review-request', 'notify-shipment', 'notify'].includes(action)) {
     throw new Error('Du hast keine Berechtigung für diese MDE-Buchung.')
   }
   const cloudToken = cloudCallSessions.get(String(sessionToken || ''))
@@ -2299,6 +2289,10 @@ ipcMain.handle('zyro-mde:list-product-reviews', (event, sessionToken) => request
 ipcMain.handle('zyro-mde:moderate-product-review', (event, reviewId, decision, sessionToken) => requestMdeCloud(event, 'review-moderate', { reviewId, decision }, sessionToken))
 ipcMain.handle('zyro-mde:notify-packed', (event, orderId, sessionToken) => requestMdeCloud(event, 'notify', { orderId }, sessionToken))
 ipcMain.handle('zyro-mde:notify-shipment', (event, orderId, sessionToken) => requestMdeCloud(event, 'notify-shipment', { orderId }, sessionToken))
+ipcMain.handle('zyro-mde:carrier-status', (event, orderId, sessionToken) => requestMdeCloud(event, 'carrier-status', { orderId }, sessionToken))
+ipcMain.handle('zyro-mde:dpd-label', (event, orderId, sessionToken) => requestMdeCloud(event, 'dpd-label', { orderId }, sessionToken))
+ipcMain.handle('zyro-mde:direct-shipment', (event, shipment, sessionToken) => requestMdeCloud(event, 'direct-shipment', shipment, sessionToken))
+ipcMain.handle('zyro-mde:manual-shipment', (event, shipment, sessionToken) => requestMdeCloud(event, 'manual-shipment', shipment, sessionToken))
 
 const requestWebsiteOrders = async (url, token, method = 'GET', body = undefined) => {
   const response = await fetch(url, {
@@ -2430,6 +2424,27 @@ ipcMain.handle('zyro-paywise:request', async (event, action, payload, sessionTok
   })
   const result = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(result.error || `Paywise-Anfrage fehlgeschlagen (${response.status}).`)
+  return result
+})
+
+ipcMain.handle('zyro-sevdesk:request', async (event, action, payload, sessionToken) => {
+  const user = getWebsiteOrderUser(event, sessionToken).user
+  if (user.role !== 'admin') throw new Error('sevDesk-Übertragungen dürfen nur von einem Admin ausgelöst werden.')
+  if (!['status', 'overview', 'sync-all', 'invoice-get', 'invoice-push'].includes(action)) throw new Error('sevDesk-Aktion ungültig.')
+  const token = await readWebsiteOrderToken()
+  if (!token) throw new Error('Für sevDesk am Desktop bitte zuerst unter Admin das Website-Admin-Token einrichten.')
+  const body = {
+    ...(payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {}),
+    action,
+  }
+  const response = await fetch('https://europe-west3-zyro-78855.cloudfunctions.net/sevdeskSync', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(120000),
+  })
+  const result = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(result.error || `sevDesk-Anfrage fehlgeschlagen (${response.status}).`)
   return result
 })
 
@@ -2754,76 +2769,6 @@ ipcMain.handle('zyro-ai:status', async (event) => {
     labelConfigured: Boolean(await readOpenAiKey()),
     labelModel: 'gpt-4o-mini',
   }
-})
-
-const defaultElsterSetup = {
-  businessName: '',
-  taxNumber: '',
-  taxOffice: '',
-  federalState: '',
-  filingPeriod: 'monthly',
-  developerStatus: 'not-started',
-  manufacturerId: '',
-  ericVersion: '',
-}
-const elsterSetupTextLimits = {
-  businessName: 160,
-  taxNumber: 40,
-  taxOffice: 120,
-  federalState: 80,
-  manufacturerId: 80,
-  ericVersion: 40,
-}
-const validateElsterSetup = (value) => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('ELSTER-Einstellungen sind ungültig.')
-  }
-  const setup = { ...defaultElsterSetup }
-  for (const [field, maxLength] of Object.entries(elsterSetupTextLimits)) {
-    if (typeof value[field] !== 'string' || value[field].length > maxLength) {
-      throw new Error(`Das Feld „${field}“ ist ungültig oder zu lang.`)
-    }
-    setup[field] = value[field].trim()
-  }
-  if (!['monthly', 'quarterly'].includes(value.filingPeriod)) {
-    throw new Error('Bitte einen gültigen UStVA-Zeitraum auswählen.')
-  }
-  if (!['not-started', 'applied', 'approved'].includes(value.developerStatus)) {
-    throw new Error('Bitte einen gültigen Herstellerstatus auswählen.')
-  }
-  setup.filingPeriod = value.filingPeriod
-  setup.developerStatus = value.developerStatus
-  return setup
-}
-
-const getElsterSetupActor = (sessionToken) => {
-  const userId = authSessions.get(String(sessionToken || ''))
-  const actor = readAuthUsers().find((user) => String(user.id) === userId)
-  if (actor?.role !== 'admin') throw new Error('ELSTER-Einstellungen dürfen nur von einem Admin verwaltet werden.')
-  if (readNetworkConfig().mode === 'client') throw new Error('ELSTER-Einstellungen bitte direkt am Haupt-PC verwalten.')
-}
-
-ipcMain.handle('zyro-elster:get-setup', async (event, sessionToken) => {
-  assertTrustedFrame(event)
-  getElsterSetupActor(sessionToken)
-  if (!safeStorage.isEncryptionAvailable()) throw new Error('Sichere Windows-Speicherung ist nicht verfügbar.')
-  try {
-    const encryptedSetup = await fs.readFile(elsterSetupPath)
-    return validateElsterSetup(JSON.parse(safeStorage.decryptString(encryptedSetup)))
-  } catch (error) {
-    if (error.code === 'ENOENT') return { ...defaultElsterSetup }
-    throw new Error(`ELSTER-Einstellungen konnten nicht gelesen werden: ${error.message}`)
-  }
-})
-
-ipcMain.handle('zyro-elster:save-setup', async (event, value, sessionToken) => {
-  assertTrustedFrame(event)
-  getElsterSetupActor(sessionToken)
-  if (!safeStorage.isEncryptionAvailable()) throw new Error('Sichere Windows-Speicherung ist nicht verfügbar.')
-  const setup = validateElsterSetup(value)
-  await fs.mkdir(path.dirname(elsterSetupPath), { recursive: true })
-  await fs.writeFile(elsterSetupPath, safeStorage.encryptString(JSON.stringify(setup)), { mode: 0o600 })
-  return setup
 })
 
 const mailboxConfigPath = path.join(app.getPath('userData'), 'mailbox.bin')
@@ -3251,6 +3196,21 @@ ipcMain.handle('zyro-printer:open-settings', async (event) => {
   throw new Error('Druckereinstellungen werden auf diesem Betriebssystem nicht unterstützt.')
 })
 
+ipcMain.handle('zyro-printer:open-pdf', async (event, base64, fileName = 'label.pdf') => {
+  assertTrustedFrame(event)
+  if (typeof base64 !== 'string' || base64.length > 8_000_000) throw new Error('PDF ist ungültig oder zu groß.')
+  const pdf = Buffer.from(base64, 'base64')
+  if (pdf.subarray(0, 4).toString('latin1') !== '%PDF') throw new Error('Die Datei ist kein PDF.')
+  const safeName = String(fileName).replace(/[^A-Za-z0-9._-]/g, '_').replace(/^\.+/, '').slice(0, 80) || 'label.pdf'
+  const directory = path.join(app.getPath('temp'), 'zyro-labels')
+  await fs.mkdir(directory, { recursive: true })
+  const filePath = path.join(directory, safeName.endsWith('.pdf') ? safeName : `${safeName}.pdf`)
+  await fs.writeFile(filePath, pdf)
+  const error = await shell.openPath(filePath)
+  if (error) throw new Error(`PDF konnte nicht geöffnet werden: ${error}`)
+  return { opened: true }
+})
+
 ipcMain.handle('zyro-printer:print-html', async (event, html, printerName = '', pageSize = 'A4') => {
   assertTrustedFrame(event)
   if (typeof html !== 'string' || !html.startsWith('<!doctype html>') || html.length > 2_000_000) {
@@ -3377,6 +3337,71 @@ ipcMain.handle('zyro-updater:open-macos-downloads', async (event) => {
 // Windows zeigt Benachrichtigungen nur mit gesetzter App-ID an.
 if (process.platform === 'win32') app.setAppUserModelId('com.libertystreetfood.zyro')
 
+// macOS: deutsches Programmmenü (Kopieren/Einfügen per Cmd, Fenster, Hilfe).
+const configureMacMenu = () => {
+  if (process.platform !== 'darwin') return
+  const name = app.name || 'Zyro Management'
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    {
+      label: name,
+      submenu: [
+        { role: 'about', label: `Über ${name}` },
+        { type: 'separator' },
+        { role: 'services', label: 'Dienste' },
+        { type: 'separator' },
+        { role: 'hide', label: `${name} ausblenden` },
+        { role: 'hideOthers', label: 'Andere ausblenden' },
+        { role: 'unhide', label: 'Alle einblenden' },
+        { type: 'separator' },
+        { role: 'quit', label: `${name} beenden` },
+      ],
+    },
+    {
+      label: 'Bearbeiten',
+      submenu: [
+        { role: 'undo', label: 'Widerrufen' },
+        { role: 'redo', label: 'Wiederholen' },
+        { type: 'separator' },
+        { role: 'cut', label: 'Ausschneiden' },
+        { role: 'copy', label: 'Kopieren' },
+        { role: 'paste', label: 'Einsetzen' },
+        { role: 'pasteAndMatchStyle', label: 'Einsetzen und Stil anpassen' },
+        { role: 'selectAll', label: 'Alles auswählen' },
+      ],
+    },
+    {
+      label: 'Darstellung',
+      submenu: [
+        { role: 'reload', label: 'Neu laden' },
+        { type: 'separator' },
+        { role: 'resetZoom', label: 'Originalgröße' },
+        { role: 'zoomIn', label: 'Vergrößern' },
+        { role: 'zoomOut', label: 'Verkleinern' },
+        { type: 'separator' },
+        { role: 'togglefullscreen', label: 'Vollbild' },
+      ],
+    },
+    {
+      label: 'Fenster',
+      role: 'window',
+      submenu: [
+        { role: 'minimize', label: 'Im Dock ablegen' },
+        { role: 'zoom', label: 'Zoomen' },
+        { type: 'separator' },
+        { role: 'front', label: 'Alle nach vorne bringen' },
+      ],
+    },
+    {
+      label: 'Hilfe',
+      role: 'help',
+      submenu: [
+        { label: 'ZYRO-Website öffnen', click: () => shell.openExternal('https://xn--zyro-getrnke-ocb.de/') },
+        { label: 'Mac-Version herunterladen', click: () => shell.openExternal('https://zyro-78855.web.app/desktop-updates/macos.html') },
+      ],
+    },
+  ]))
+}
+
 app.whenReady().then(async () => {
   session.defaultSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin) => (
     permission === 'media' && requestingOrigin.startsWith('zyro://app')
@@ -3409,6 +3434,7 @@ app.whenReady().then(async () => {
     return net.fetch(pathToFileURL(filePath).toString())
   })
 
+  configureMacMenu()
   await createWindow()
   configureAutoUpdates()
   cloudSync.startTimer()

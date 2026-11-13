@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('zyroPrinter', {
   getPrinters: () => ipcRenderer.invoke('zyro-printer:list'),
   openSettings: () => ipcRenderer.invoke('zyro-printer:open-settings'),
   printHtml: (html, printerName, pageSize) => ipcRenderer.invoke('zyro-printer:print-html', html, printerName, pageSize),
+  openPdf: (base64, fileName) => ipcRenderer.invoke('zyro-printer:open-pdf', base64, fileName),
 })
 
 contextBridge.exposeInMainWorld('zyroAI', {
@@ -33,11 +34,6 @@ contextBridge.exposeInMainWorld('zyroAI', {
   ),
   generateLabelDesign: (prompt) => ipcRenderer.invoke('zyro-ai:generate-label-design', prompt),
   estimateLabelNutrition: (prompt) => ipcRenderer.invoke('zyro-ai:estimate-label-nutrition', prompt),
-})
-
-contextBridge.exposeInMainWorld('zyroElster', {
-  getSetup: (sessionToken) => ipcRenderer.invoke('zyro-elster:get-setup', sessionToken),
-  saveSetup: (setup, sessionToken) => ipcRenderer.invoke('zyro-elster:save-setup', setup, sessionToken),
 })
 
 contextBridge.exposeInMainWorld('zyroFinanceReceipts', {
@@ -83,6 +79,14 @@ contextBridge.exposeInMainWorld('zyroPaywise', {
   mahnserviceGet: (invoiceId, sessionToken) => ipcRenderer.invoke('zyro-paywise:request', 'mahnservice-get', { invoiceId }, sessionToken),
   mahnserviceSubmit: (submission, sessionToken) => ipcRenderer.invoke('zyro-paywise:request', 'mahnservice-submit', submission, sessionToken),
   mahnservicePayment: (invoiceId, sessionToken) => ipcRenderer.invoke('zyro-paywise:request', 'mahnservice-payment', { invoiceId }, sessionToken),
+})
+
+contextBridge.exposeInMainWorld('zyroSevdesk', {
+  status: (sessionToken) => ipcRenderer.invoke('zyro-sevdesk:request', 'status', {}, sessionToken),
+  overview: (sessionToken) => ipcRenderer.invoke('zyro-sevdesk:request', 'overview', {}, sessionToken),
+  syncAll: (sessionToken) => ipcRenderer.invoke('zyro-sevdesk:request', 'sync-all', {}, sessionToken),
+  invoiceGet: (invoiceId, sessionToken) => ipcRenderer.invoke('zyro-sevdesk:request', 'invoice-get', { invoiceId }, sessionToken),
+  invoicePush: (invoiceId, sessionToken) => ipcRenderer.invoke('zyro-sevdesk:request', 'invoice-push', { invoiceId }, sessionToken),
 })
 
 contextBridge.exposeInMainWorld('zyroCloud', {
@@ -189,4 +193,8 @@ contextBridge.exposeInMainWorld('zyroMde', {
   moderateProductReview: (reviewId, decision, sessionToken) => ipcRenderer.invoke('zyro-mde:moderate-product-review', reviewId, decision, sessionToken),
   notifyPacked: (orderId, sessionToken) => ipcRenderer.invoke('zyro-mde:notify-packed', orderId, sessionToken),
   notifyShipment: (orderId, sessionToken) => ipcRenderer.invoke('zyro-mde:notify-shipment', orderId, sessionToken),
+  getCarrierStatus: (orderId, sessionToken) => ipcRenderer.invoke('zyro-mde:carrier-status', orderId, sessionToken),
+  getDpdLabel: (orderId, sessionToken) => ipcRenderer.invoke('zyro-mde:dpd-label', orderId, sessionToken),
+  createDirectShipment: (shipment, sessionToken) => ipcRenderer.invoke('zyro-mde:direct-shipment', shipment, sessionToken),
+  createManualShipment: (shipment, sessionToken) => ipcRenderer.invoke('zyro-mde:manual-shipment', shipment, sessionToken),
 })

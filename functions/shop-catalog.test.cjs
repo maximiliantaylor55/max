@@ -126,3 +126,21 @@ test('Shop-Katalog aktiviert Vorbestellungen nur mit gültigem zukünftigem Lief
   assert.equal(missingDate.preorderEnabled, false)
   assert.equal(pastDate.preorderEnabled, false)
 })
+
+test('marks mix trays as tray-only articles', () => {
+  const [mix] = buildDesktopCatalog([{ name: 'ZYRO Mix-Tray', sku: 'ZYR-MIX-24', unitPrice: '1.60', weightKg: '0.54', shopActive: true, shopTrayOnly: true, category: 'Mix-Tray' }])
+  assert.equal(mix.trayOnly, true)
+  assert.equal(mix.category, 'Mix-Tray')
+  const [single] = buildDesktopCatalog([{ name: 'ZYRO Pfirsich', sku: 'ZYR-PM', unitPrice: '1.60', weightKg: '0.54', shopActive: true }])
+  assert.equal(single.trayOnly, false)
+})
+
+test('never sells shipping articles and ignores per-product shipping prices', () => {
+  const catalog = buildDesktopCatalog([
+    { name: 'Versand DPD', sku: 'VERSAND', unitPrice: '5.00', weightKg: '0.1', shopActive: true, category: 'Versand' },
+    { name: 'ZYRO Pfirsich', sku: 'ZYR-PM', unitPrice: '1.60', weightKg: '0.54', shopActive: true, shopShippingUnit: '1.5', shopShippingTray: '6' },
+  ])
+  assert.equal(catalog.length, 1)
+  assert.equal(catalog[0].shippingUnitCents, undefined)
+  assert.equal(catalog[0].shippingTrayCents, undefined)
+})

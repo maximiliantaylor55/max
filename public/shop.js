@@ -21,6 +21,7 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
   let accountReturnFocus = null
   let accountReturnPanel = ''
   let productReturnFocus = null
+  let activeCategory = ''
 
   const el = (tag, className, text) => {
     const node = document.createElement(tag)
@@ -98,7 +99,7 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     const product = productById(id)
     if (!product) return
     let next = Math.max(0, Math.min(9999, Math.floor(Number(quantity) || 0)))
-    if (shop.businessPricing?.active) {
+    if (shop.businessPricing?.active || product.trayOnly) {
       if (Number.isSafeInteger(product.stock) && !(product.stock === 0 && product.preorderEnabled)) {
         next = Math.min(next, Math.floor(product.stock / 24) * 24)
       }
@@ -161,15 +162,57 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     const average = new Intl.NumberFormat('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(stats.average)
     const summary = el('p', 'review-summary', `★ ${average} von 5 · ${stats.count} verifizierte ${stats.count === 1 ? 'Bewertung' : 'Bewertungen'}`)
     box.append(summary)
+    if (!detailed) return
     const productReviews = (shop.reviews || [])
       .filter((review) => review.productId === product.id)
-      .slice(0, detailed ? 3 : 1)
+      .slice(0, 3)
     productReviews.forEach((review) => {
       const card = el('blockquote', 'customer-review')
       card.append(el('strong', '', `${'★'.repeat(Math.max(0, Math.min(5, review.rating)))}${'☆'.repeat(5 - Math.max(0, Math.min(5, review.rating)))} · Verifizierter Kauf`))
       if (review.comment) card.append(el('p', '', review.comment))
       box.append(card)
     })
+  }
+
+  // Bewertungen gesammelt ganz unten über dem Footer
+  const renderReviewSection = () => {
+    const section = $('#bewertungen')
+    const list = $('#reviews-list')
+    if (!section || !list) return
+    const reviews = (shop.reviews || []).filter((review) => Number(review.rating) > 0)
+    list.replaceChildren()
+    const navLink = $('#nav-reviews')
+    const heroRating = $('#hero-rating')
+    if (!reviews.length) {
+      section.hidden = true
+      if (navLink) navLink.hidden = true
+      if (heroRating) heroRating.hidden = true
+      return
+    }
+    const average = reviews.reduce((sum, review) => sum + Number(review.rating), 0) / reviews.length
+    const averageText = new Intl.NumberFormat('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(average)
+    const averageBox = $('#reviews-average')
+    averageBox.replaceChildren(
+      el('strong', '', averageText),
+      el('span', 'zyro-reviews-stars', '★'.repeat(Math.round(average)) + '☆'.repeat(5 - Math.round(average))),
+      el('small', '', `${reviews.length} ${reviews.length === 1 ? 'Bewertung' : 'Bewertungen'}`),
+    )
+    reviews.slice(0, 6).forEach((review) => {
+      const rating = Math.max(0, Math.min(5, Number(review.rating) || 0))
+      const card = el('article', 'zyro-review-card')
+      card.append(el('p', 'zyro-reviews-stars', '★'.repeat(rating) + '☆'.repeat(5 - rating)))
+      card.append(el('blockquote', '', review.comment || 'Ohne Kommentar bewertet.'))
+      const meta = [review.productName, review.createdAt ? new Date(review.createdAt).toLocaleDateString('de-DE', { month: 'long', year: 'numeric' }) : ''].filter(Boolean).join(' · ')
+      card.append(el('p', 'zyro-review-meta', `Verifizierter Kauf${meta ? ` · ${meta}` : ''}`))
+      list.append(card)
+    })
+    section.hidden = false
+    if (navLink) navLink.hidden = false
+    if (heroRating) {
+      $('#hero-rating-value').textContent = `★ ${averageText} von 5`
+      $('#hero-rating-text').textContent = `aus ${reviews.length} verifizierten ${reviews.length === 1 ? 'Kauf' : 'Käufen'}`
+      heroRating.hidden = false
+    }
   }
 
   const showProductDetail = (product, index) => {
@@ -236,21 +279,22 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     info.append(price)
     const preorder = product.stock === 0 && product.preorderEnabled
     const businessCustomer = shop.businessPricing?.active === true
-    const step = businessCustomer ? 24 : 1
+    const trayOnly = businessCustomer || product.trayOnly === true
+    const step = trayOnly ? 24 : 1
     const availableQuantity = Number.isSafeInteger(product.stock) && !preorder
       ? Math.max(0, product.stock - (Number(cart[product.id]) || 0))
       : 9999
-    const maxQuantity = businessCustomer ? Math.floor(availableQuantity / 24) * 24 : availableQuantity
+    const maxQuantity = trayOnly ? Math.floor(availableQuantity / 24) * 24 : availableQuantity
     const purchase = el('div', 'product-detail-purchase')
     const quantityLabel = el('label', 'product-detail-quantity')
-    quantityLabel.append(el('span', '', businessCustomer ? 'Trays' : 'Menge'))
+    quantityLabel.append(el('span', '', businessCustomer ? 'Trays' : trayOnly ? 'Dosen (nur ganze 24er-Trays)' : 'Menge'))
     const quantityInput = el('input')
     quantityInput.type = 'number'
     quantityInput.min = String(step)
     quantityInput.max = String(Math.max(step, maxQuantity))
     quantityInput.step = String(step)
     quantityInput.value = String(step)
-    quantityInput.setAttribute('aria-label', businessCustomer ? `Anzahl 24er-Trays ${product.name}` : `Anzahl Dosen ${product.name}`)
+    quantityInput.setAttribute('aria-label', trayOnly ? `Anzahl Dosen in 24er-Trays ${product.name}` : `Anzahl Dosen ${product.name}`)
     quantityLabel.append(quantityInput)
     const add = el('button', 'shop-primary product-detail-add', businessCustomer
       ? 'In den Warenkorb'
@@ -302,7 +346,31 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     openPanel('#product-panel')
   }
 
+  // Kategorien kommen aus dem Feld „Kategorie“ der Artikel im Programm.
+  const renderCategoryFilter = () => {
+    const box = $('#shop-filters')
+    if (!box) return
+    const categories = [...new Set(shop.products.map((product) => String(product.category || '').trim()).filter(Boolean))]
+      .sort((left, right) => left.localeCompare(right, 'de'))
+    if (activeCategory && !categories.includes(activeCategory)) activeCategory = ''
+    box.replaceChildren()
+    if (categories.length < 2) { show(box, false); return }
+    ;[['', 'Alle'], ...categories.map((category) => [category, category])].forEach(([value, label]) => {
+      const count = value ? shop.products.filter((product) => String(product.category || '').trim() === value).length : shop.products.length
+      const button = el('button', 'shop-filter', `${label} (${count})`)
+      button.type = 'button'
+      button.setAttribute('aria-pressed', String(activeCategory === value))
+      button.addEventListener('click', () => {
+        activeCategory = value
+        renderProducts()
+      })
+      box.append(button)
+    })
+    show(box)
+  }
+
   const renderProducts = () => {
+    renderReviewSection()
     const grid = $('#product-grid')
     grid.replaceChildren()
     const businessCustomer = shop.businessPricing?.active === true
@@ -335,7 +403,11 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
         return
       }
     }
+    renderCategoryFilter()
+    const visibleProducts = shop.products.filter((product) => !activeCategory || String(product.category || '').trim() === activeCategory)
+    show($('#shop-filter-empty'), Boolean(activeCategory) && !visibleProducts.length)
     shop.products.forEach((product, index) => {
+      if (activeCategory && String(product.category || '').trim() !== activeCategory) return
       const card = el('article', 'card')
       const visual = el('div', 'visual')
       const [from, to] = gradients[index % gradients.length].split(',')
@@ -351,20 +423,25 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
       }
       if (Number.isSafeInteger(product.stock)) {
         const businessTrays = Math.floor(product.stock / 24)
-        const out = businessCustomer ? businessTrays < 1 : product.stock < 1
+        const countTrays = businessCustomer || product.trayOnly === true
+        const out = countTrays ? businessTrays < 1 : product.stock < 1
         const badgeText = out
           ? (product.preorderEnabled ? 'Vorbestellung' : 'Ausverkauft')
-          : businessCustomer
+          : countTrays
             ? `${businessTrays} ${businessTrays === 1 ? 'Tray' : 'Trays'} verfügbar`
             : product.stock < 48 ? `Nur noch ${product.stock}` : 'Auf Lager'
         visual.append(el('span', `badge${out || (!businessCustomer && product.stock < 48) ? ' warn' : ''}`, badgeText))
       }
       const body = el('div', 'body')
+      if (product.category) body.append(el('p', 'card-category', product.category))
       body.append(el('h3', '', product.name))
       appendReviewSummary(body, product)
       if (product.description) body.append(el('p', 'card-desc', product.description))
-      if (businessCustomer) {
+      if (businessCustomer || product.trayOnly === true) {
         body.append(el('div', 'price', `${euro(product.cratePriceCents)} pro 24er-Tray`))
+        if (!businessCustomer && product.stock === 0 && product.preorderEnabled && product.expectedDeliveryDate) {
+          body.append(el('p', 'hint', `Voraussichtliche Lieferung: ${formatDate(product.expectedDeliveryDate)}`))
+        }
         const quantityPicker = el('div', 'quantity-picker')
         quantityPicker.append(el('span', 'quantity-picker-label', 'Bestellmenge in 24er-Trays'))
         const maxTrays = Number.isSafeInteger(product.stock) && !(product.stock === 0 && product.preorderEnabled)
@@ -385,7 +462,7 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
           const trays = Math.max(1, Math.min(maxTrays, Math.floor(Number(trayInput.value) || 1)))
           summary.textContent = `${trays * 24} Dosen · ${euro(product.cratePriceCents * trays)}`
         })
-        const applyQuantity = el('button', 'primary', 'Menge übernehmen')
+        const applyQuantity = el('button', 'primary', businessCustomer ? 'Menge übernehmen' : (product.stock === 0 && product.preorderEnabled ? 'Vorbestellen' : 'In den Warenkorb'))
         applyQuantity.type = 'button'
         applyQuantity.disabled = maxTrays < 1
         applyQuantity.addEventListener('click', () => {
@@ -400,7 +477,9 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
         const add = el('div', 'add')
         add.append(trayInput, applyQuantity)
         quantityPicker.append(summary)
-        body.append(quantityPicker, add, el('p', 'hint', 'Nur volle 24er-Trays. Bis zur eingestellten Menge und 31,5 kg per DPD, darüber per Spedition.'))
+        body.append(quantityPicker, add, el('p', 'hint', businessCustomer
+          ? 'Nur volle 24er-Trays. Bis zur eingestellten Menge und 31,5 kg per DPD, darüber per Spedition.'
+          : 'Gibt es nur als ganzes 24er-Tray.'))
         card.append(visual, body)
         const openDetail = () => showProductDetail(product, index)
         visual.classList.add('clickable')
@@ -508,11 +587,23 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     let deposit = 0
     let trayCount = 0
     const businessTrayWeights = []
+    let fixedShipping = 0
+    let restSubtotal = 0
     for (const [id, quantity] of Object.entries(cart)) {
       const product = productById(id)
       if (!product) continue
       deposit += (product.depositCents || 0) * quantity
       subtotal += lineCents(product, quantity)
+      const hasUnit = Number.isSafeInteger(product.shippingUnitCents)
+      const hasTray = Number.isSafeInteger(product.shippingTrayCents)
+      if (hasUnit || hasTray) {
+        // Versandkosten direkt am Artikel hinterlegt
+        const trayCost = hasTray ? product.shippingTrayCents : product.shippingUnitCents * 24
+        const unitCost = hasUnit ? product.shippingUnitCents : Math.ceil(product.shippingTrayCents / 24)
+        fixedShipping += Math.floor(quantity / 24) * trayCost + (quantity % 24) * unitCost
+        continue
+      }
+      restSubtotal += lineCents(product, quantity)
       weight += quantity * product.unitWeightGrams + Math.floor(quantity / 24) * (settings.largeCartonTareGrams || 0) + (quantity % 24 ? (settings.smallCartonTareGrams || 0) : 0)
       trayCount += Math.ceil(quantity / 24)
       for (let tray = 0; tray < Math.floor(quantity / 24); tray += 1) {
@@ -524,8 +615,8 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     const businessDpdParcelWeights = businessCustomer && trayCount <= dpdMaxTrays
       ? getBusinessDpdParcelWeights(businessTrayWeights)
       : null
-    const businessShipping = businessCustomer && subtotal > 0 && !businessDpdParcelWeights
-    const businessDpdShipping = businessCustomer && subtotal > 0 && !businessShipping
+    const businessShipping = businessCustomer && restSubtotal > 0 && !businessDpdParcelWeights
+    const businessDpdShipping = businessCustomer && restSubtotal > 0 && !businessShipping
     let shippingPalletCount = 0
     const shippingTiers = Array.isArray(settings.shippingTiers) ? settings.shippingTiers : []
     const businessDpdShippingTiers = Array.isArray(settings.businessDpdShippingTiers) && settings.businessDpdShippingTiers.length
@@ -551,15 +642,16 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
           shipping += tier.priceCents
         }
       }
-    } else if (subtotal && shippingTiers.length) {
+    } else if (restSubtotal && shippingTiers.length) {
       const tier = shippingTiers.find((entry) => weight <= entry.maxWeightGrams) || shippingTiers[shippingTiers.length - 1]
       const parcelCount = Math.max(1, Math.ceil(weight / shippingTiers[shippingTiers.length - 1].maxWeightGrams))
       shipping = tier === shippingTiers[shippingTiers.length - 1] && weight > tier.maxWeightGrams
         ? tier.priceCents * parcelCount
         : tier.priceCents
-    } else if (subtotal) {
+    } else if (restSubtotal) {
       shipping = (settings.shippingPriceCents || 0) + Math.ceil(weight / 1000) * (settings.shippingPricePerKgCents || 0)
     }
+    shipping += fixedShipping
     return { subtotal, shipping, deposit, weight, shippingPalletCount, businessShipping, businessDpdShipping, businessDpdParcelCount, invalidBusinessDpdShipping, total: settings.pricesIncludeVat === false ? null : subtotal + shipping + deposit }
   }
 
@@ -630,8 +722,8 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
       const details = el('div', 'line-main')
       details.append(el('b', '', product.name))
       const businessCustomer = shop.businessPricing?.active === true
-      line.classList.toggle('business-line', businessCustomer)
-      if (businessCustomer) {
+      line.classList.toggle('business-line', businessCustomer || product.trayOnly === true)
+      if (businessCustomer || product.trayOnly === true) {
         const exactTrays = quantity % 24 === 0
         details.append(el('small', 'line-meta', exactTrays
           ? `${quantity / 24} ${quantity / 24 === 1 ? '24er-Tray' : '24er-Trays'} · ${doseLabel(quantity)}`
@@ -860,7 +952,6 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
       panel.replaceChildren()
       const success = el('div', 'success')
       success.append(el('h3', '', 'Danke für deine Bestellung! 🎉'), el('p', '', `Bestellnummer: ${result.orderNumber}`))
-      try { window.dispatchEvent(new CustomEvent('zyro:purchase', { detail: { orderNumber: String(result.orderNumber || ''), value: Number(result.totalPriceCents || 0) / 100 } })) } catch { /* Messung ist optional */ }
       if (preorderItems.length) {
         success.append(el('p', 'hint', `Vorbestellung: ${preorderItems.map((item) => `${item.productName}${item.expectedDeliveryDate ? ` (voraussichtliche Lieferung ${formatDate(item.expectedDeliveryDate)})` : ''}`).join(', ')}`))
       }
@@ -950,7 +1041,6 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
   }
 
   const showPaypalOrderSuccess = (orderNumber, confirmationEmailSent) => {
-    try { window.dispatchEvent(new CustomEvent('zyro:purchase', { detail: { orderNumber: String(orderNumber || ''), value: null } })) } catch { /* Messung ist optional */ }
     cart = {}
     appliedDiscount = null
     saveCart()
@@ -1010,6 +1100,60 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     }
   }
 
+  // Sendungsverfolgung im Kundenkonto – Daten kommen über unseren Server direkt von DPD/DHL.
+  const trackingTime = (value) => {
+    const text = String(value || '')
+    if (!text) return ''
+    const date = new Date(text)
+    return /^\d{4}-\d{2}-\d{2}/.test(text) && !Number.isNaN(date.valueOf())
+      ? new Intl.DateTimeFormat('de-DE', { dateStyle: 'short', timeStyle: 'short' }).format(date)
+      : text
+  }
+
+  const renderTracking = (box, tracking) => {
+    box.replaceChildren()
+    const steps = el('ol', 'tracking-steps')
+    steps.setAttribute('aria-label', 'Sendungsfortschritt')
+    ;(tracking.phases || []).forEach((label, index) => {
+      const step = el('li', index < tracking.phase ? 'done' : index === tracking.phase ? 'current' : '', label)
+      if (index === tracking.phase) step.setAttribute('aria-current', 'step')
+      steps.append(step)
+    })
+    box.append(el('p', 'tracking-phase', tracking.phaseLabel || 'Status unbekannt'), steps)
+    if (tracking.current) {
+      const details = [tracking.current.description, tracking.current.location, trackingTime(tracking.current.timestamp)].filter(Boolean).join(' · ')
+      if (details) box.append(el('p', 'tracking-current', details))
+    }
+    if (tracking.message) box.append(el('p', 'hint', tracking.message))
+    if (tracking.trackingNumber) box.append(el('p', 'hint', `${tracking.carrier || 'Versand'} · Sendungsnummer ${tracking.trackingNumber}`))
+    if (tracking.events?.length) {
+      const history = el('details', 'tracking-history')
+      history.append(el('summary', '', `Sendungsverlauf (${tracking.events.length})`))
+      const list = el('ul')
+      tracking.events.forEach((event) => list.append(el('li', '', [trackingTime(event.timestamp), event.description, event.location].filter(Boolean).join(' · '))))
+      history.append(list)
+      box.append(history)
+    }
+  }
+
+  const loadTracking = async (box, order, token, button) => {
+    show(box)
+    box.replaceChildren(el('p', 'hint', 'Sendungsstatus wird bei ' + (order.trackingProvider || 'DPD') + ' abgefragt …'))
+    if (button) button.disabled = true
+    try {
+      const { tracking } = await api('/api/portal/tracking', { method: 'POST', headers: authHeaders(token), body: JSON.stringify({ orderId: order.id }) })
+      renderTracking(box, tracking)
+      const refresh = el('button', 'link', 'Status aktualisieren')
+      refresh.type = 'button'
+      refresh.addEventListener('click', () => loadTracking(box, order, token, refresh))
+      box.append(refresh)
+    } catch (error) {
+      box.replaceChildren(el('p', 'notice', error.message || 'Sendungsstatus konnte nicht geladen werden.'))
+    } finally {
+      if (button) button.disabled = false
+    }
+  }
+
   const renderOrders = (orders, token) => {
     const container = $('#orders')
     container.replaceChildren()
@@ -1017,12 +1161,23 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
     orders.forEach((order) => {
       const card = el('article', 'order')
       const head = el('header')
-      head.append(el('span', '', order.orderNumber), el('span', 'status', order.status))
+      head.append(el('span', '', order.orderNumber), el('span', 'status', order.trackingNumber ? (order.shipmentPhase || order.status) : order.status))
       card.append(head)
       card.append(el('span', 'hint', `${new Date(order.createdAt).toLocaleDateString('de-DE')} · ${euro(order.totalPriceCents || 0)} · Zahlung: ${order.paymentStatus === 'paid' ? 'bezahlt' : 'offen'}`))
       order.items.forEach((item) => card.append(el('span', '', `${item.quantity} × ${item.productName}${item.isPreorder ? ` · VORBESTELLUNG${item.expectedDeliveryDate ? ` · voraussichtliche Lieferung ${formatDate(item.expectedDeliveryDate)}` : ''}` : ''}`)))
       if (order.trackingNumber) card.append(el('span', '', `Sendung: ${order.trackingProvider || ''} ${order.trackingNumber}`))
+      const trackingBox = el('div', 'order-tracking')
+      trackingBox.setAttribute('aria-live', 'polite')
+      show(trackingBox, false)
       const actions = el('div', 'actions')
+      if (order.trackingNumber) {
+        const track = el('button', '', order.delivered ? 'Zustellung ansehen' : 'Sendung verfolgen'); track.type = 'button'
+        track.addEventListener('click', () => {
+          if (!trackingBox.hidden && trackingBox.childElementCount) { show(trackingBox, false); return }
+          loadTracking(trackingBox, order, token, track)
+        })
+        actions.append(track)
+      }
       const again = el('button', '', 'Nochmal bestellen'); again.type = 'button'
       again.addEventListener('click', () => {
         order.items.forEach((item) => { if (productById(item.productId)) setQuantity(item.productId, (cart[item.productId] || 0) + item.quantity) })
@@ -1042,7 +1197,7 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
         })
         actions.append(invoice)
       }
-      card.append(actions)
+      card.append(actions, trackingBox)
       container.append(card)
     })
     show(container)
@@ -1277,8 +1432,6 @@ import { getShopQuantityOptions } from './shop-quantity-options.js'
       if (firstRadio) firstRadio.checked = true
       const params = new URLSearchParams(location.search)
       if (params.get('paid')) {
-        try { window.dispatchEvent(new CustomEvent('zyro:purchase', { detail: { orderNumber: String(params.get('paid') || ''), value: null } })) } catch { /* Messung ist optional */ }
-
         cart = {}
         saveCart()
         notice($('#shop-message'), `Danke! Deine Zahlung wird bestätigt. Bestellnummer: ${params.get('paid')}. Die Bestätigung kommt per E-Mail.`)

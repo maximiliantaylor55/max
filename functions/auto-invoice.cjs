@@ -61,6 +61,7 @@ const createInvoiceFromOrder = ({ order, documents, responsibleName = 'Scanner',
     number,
     relatedOrderId: order.relatedOrderId || '',
     sourceOrderId: String(order.id),
+    orderNumber: order.number || '',
     customerId: order.customerId || '',
     lotNumber: '',
     recipient: order.billingRecipient || order.recipient || '',
@@ -94,99 +95,211 @@ const createInvoiceFromOrder = ({ order, documents, responsibleName = 'Scanner',
   return { invoice, created: true }
 }
 
+const formatIban = (iban) => String(iban || '').replace(/\s+/g, '').replace(/(.{4})/g, '$1 ').trim()
+
+// Zerlegt die Positionsbeschreibung in Artikelname und eine ruhige Detailzeile.
+const describeItem = (item) => {
+  const name = String(item.productName || '').trim()
+  const parts = String(item.description || '').split('·').map((part) => part.trim()).filter(Boolean)
+  const title = name || parts[0] || 'Artikel'
+  const details = parts.filter((part) => part !== title && part !== item.productSku)
+  if (item.productSku) details.unshift(`Art.-Nr. ${item.productSku}`)
+  return { title, details: [...new Set(details)].join(' · ') }
+}
+
 const buildInvoicePdf = (invoice, products = [], companyInput = defaultCompanyDetails) => new Promise((resolve, reject) => {
   const company = normalizeCompanyDetails(companyInput)
-  const accentColor = {
-    zyro: '#9c562f',
+  const accent = {
+    zyro: '#7a4528',
     modern: '#156b83',
     classic: '#283b52',
-  }[company.documentLayout] || '#9c562f'
+  }[company.documentLayout] || '#7a4528'
+  const ink = '#1f1a16'
+  const muted = '#6f655c'
+  const line = '#e4ddd4'
+  const tint = '#f6f1ea'
   const totals = calculateInvoiceTotals(invoice, products)
-  const pdf = new PDFDocument({ size: 'A4', margin: 48, info: { Title: `Rechnung ${invoice.number}`, Author: company.name } })
+  const pdf = new PDFDocument({ size: 'A4', margins: { top: 48, bottom: 40, left: 56, right: 56 }, bufferPages: true, info: { Title: `Rechnung ${invoice.number}`, Author: company.name } })
   const chunks = []
   pdf.on('data', (chunk) => chunks.push(chunk))
   pdf.on('end', () => resolve(Buffer.concat(chunks)))
   pdf.on('error', reject)
 
-  pdf.font('Helvetica-Bold').fontSize(20).fillColor(accentColor).text('ZYRO', 48, 48)
-  pdf.font('Helvetica').fontSize(8).fillColor('#343a3b').text(company.name.toUpperCase())
-  pdf.moveTo(48, 84).lineTo(547, 84).strokeColor(accentColor).lineWidth(2).stroke()
-  pdf.fontSize(9).fillColor('#4b5354').text(`${company.name} · ${company.street} · ${company.postalCode} ${company.city} · ${company.country}`, 48, 96)
-  pdf.font('Helvetica-Bold').fontSize(11).fillColor('#202628').text(invoice.recipient || '', 48, 118)
-  pdf.font('Helvetica').fontSize(10).text(invoice.recipientAddress || '', { width: 240 })
-  if (invoice.recipientVatId) {
-    pdf.font('Helvetica').fontSize(9).text(`USt-IdNr.: ${invoice.recipientVatId}`, { width: 240 })
+  const left = 56
+  const right = 539
+  const width = right - left
+  const contentBottom = 728
+  const orderNumber = invoice.orderNumber || (String(invoice.notes || '').match(/Auftrag\s+(\S+)/) || [])[1] || ''
+
+  const text = (value, x, y, options = {}, style = {}) => {
+    pdf.font(style.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(style.size || 9).fillColor(style.color || ink)
+    pdf.text(String(value ?? ''), x, y, { lineBreak: options.width !== undefined, ...options })
   }
 
-  pdf.font('Helvetica-Bold').fontSize(22).fillColor(accentColor).text('Rechnung', 330, 48, { width: 217, align: 'right' })
-  pdf.font('Helvetica').fontSize(10).fillColor('#202628')
-  pdf.text(`Rechnungsnummer: ${invoice.number}`, 330, 82, { width: 217, align: 'right' })
-  pdf.text(`Rechnungsdatum: ${germanDate(invoice.documentDate)}`, { width: 217, align: 'right' })
-  if (invoice.dueDate) pdf.text(`Fällig am: ${germanDate(invoice.dueDate)}`, { width: 217, align: 'right' })
-  pdf.text(`Zahlungsart: ${invoice.paymentMethod || ''}`, { width: 217, align: 'right' })
+  // Kopf: Marke links, Absender rechts
+  text('ZYRO', left, 48, {}, { bold: true, size: 26, color: accent })
+  text(company.name, left, 80, {}, { size: 8, color: muted })
+  const headerLines = [company.name, company.street, `${company.postalCode} ${company.city}`, company.email, company.website.replace(/^https?:\/\//, '')].filter(Boolean)
+  headerLines.forEach((entry, index) => text(entry, 339, 50 + index * 11, { width: 200, align: 'right' }, { size: 8, bold: index === 0, color: index === 0 ? ink : muted }))
+  pdf.moveTo(left, 112).lineTo(right, 112).lineWidth(1.5).strokeColor(accent).stroke()
 
-  let y = 215
-  const drawRow = (cells, bold = false) => {
-    pdf.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(9).fillColor(bold ? accentColor : '#202628')
-    const positions = [48, 80, 300, 360, 450]
-    const widths = [28, 215, 55, 85, 97]
-    const heights = cells.map((cell, index) => pdf.heightOfString(String(cell), { width: widths[index] }))
-    const rowHeight = Math.max(...heights) + 6
-    if (y + rowHeight > 740) {
-      pdf.addPage()
-      y = 60
-    }
-    cells.forEach((cell, index) => pdf.text(String(cell), positions[index], y, { width: widths[index], align: index >= 2 ? 'right' : 'left' }))
-    y += rowHeight
-    pdf.moveTo(48, y - 2).lineTo(547, y - 2).strokeColor('#d4d9d9').lineWidth(0.5).stroke()
-  }
-  drawRow(['Pos.', 'Beschreibung', 'Menge', 'Einzel (netto)', 'Netto'], true)
-  getItems(invoice).forEach((item, index) => {
-    const quantity = Number(item.quantity) || 0
-    const unit = Number(item.unitPrice) || 0
-    drawRow([index + 1, item.description || item.productName || 'Artikel', quantity, euro(unit), euro(quantity * unit)])
+  // Anschriftfeld (DIN 5008) und Rechnungsdaten
+  text(`${company.name} · ${company.street} · ${company.postalCode} ${company.city}`, left, 132, { width: 250 }, { size: 6.5, color: muted })
+  pdf.moveTo(left, 142).lineTo(left + 250, 142).lineWidth(0.4).strokeColor(line).stroke()
+  text(invoice.recipient || '', left, 150, { width: 250 }, { bold: true, size: 10.5 })
+  text(invoice.recipientAddress || '', left, pdf.y + 2, { width: 250, lineGap: 1.5 }, { size: 10 })
+
+  const meta = [
+    ['Rechnungsnummer', invoice.number],
+    ['Rechnungsdatum', germanDate(invoice.documentDate)],
+    invoice.dueDate && invoice.paymentStatus !== 'paid' ? ['Zahlbar bis', germanDate(invoice.dueDate)] : null,
+    orderNumber ? ['Auftrag', orderNumber] : null,
+    ['Zahlungsart', invoice.paymentMethod || '–'],
+    invoice.recipientVatId ? ['Ihre USt-IdNr.', invoice.recipientVatId] : null,
+  ].filter(Boolean)
+  const metaX = 345
+  const metaY = 132
+  pdf.roundedRect(metaX - 10, metaY - 8, right - metaX + 10, meta.length * 16 + 12, 6).fillColor(tint).fill()
+  meta.forEach(([label, value], index) => {
+    const y = metaY + index * 16
+    text(label, metaX, y, { width: 90 }, { size: 8.5, color: muted })
+    text(value, metaX + 90, y, { width: right - metaX - 98, align: 'right' }, { size: 8.5, bold: index === 0 })
   })
-  if (totals.extraNet > 0) drawRow(['', 'Versand und weitere Positionen', '', '', euro(totals.extraNet)])
 
-  if (y > 650) {
+  // Titel
+  let y = Math.max(pdf.y, metaY + meta.length * 16 + 10) + 34
+  y = Math.max(y, 268)
+  text(`Rechnung ${invoice.number}`, left, y, {}, { bold: true, size: 17 })
+  y += 26
+  text(invoice.paymentStatus === 'paid'
+    ? 'Vielen Dank für Ihre Bestellung. Wir stellen Ihnen folgende Leistungen in Rechnung – der Betrag ist bereits bezahlt.'
+    : 'Vielen Dank für Ihre Bestellung. Wir stellen Ihnen folgende Leistungen in Rechnung:', left, y, { width }, { size: 9.5, color: muted })
+  y = pdf.y + 16
+
+  // Positionstabelle
+  const columns = [
+    { key: 'pos', label: 'Pos.', x: left + 8, width: 24, align: 'left' },
+    { key: 'item', label: 'Artikel', x: left + 36, width: 222, align: 'left' },
+    { key: 'qty', label: 'Menge', x: left + 262, width: 46, align: 'right' },
+    { key: 'unit', label: 'Einzelpreis', x: left + 312, width: 70, align: 'right' },
+    { key: 'vat', label: 'USt.', x: left + 386, width: 30, align: 'right' },
+    { key: 'sum', label: 'Gesamt', x: left + 420, width: width - 428, align: 'right' },
+  ]
+  const drawTableHeader = () => {
+    pdf.rect(left, y, width, 22).fillColor(accent).fill()
+    columns.forEach((column) => text(column.label, column.x, y + 7, { width: column.width, align: column.align }, { bold: true, size: 8.5, color: '#ffffff' }))
+    y += 22
+  }
+  const ensureSpace = (height, repeatHeader = false) => {
+    if (y + height <= contentBottom) return
     pdf.addPage()
     y = 60
+    if (repeatHeader) drawTableHeader()
   }
-  y += 10
-  const totalLine = (label, value, bold = false) => {
-    pdf.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(bold ? 11 : 10).fillColor('#202628')
-    pdf.text(label, 330, y, { width: 120 })
-    pdf.text(euro(value), 450, y, { width: 97, align: 'right' })
-    y += bold ? 18 : 15
-  }
-  totalLine('Nettobetrag', totals.netTotal)
-  totalLine(`Umsatzsteuer ${totals.vatRate} %`, totals.taxTotal)
-  totalLine('Rechnungsbetrag brutto', totals.grossTotal, true)
-  if (totals.depositTotal > 0) {
-    totalLine('Pfand (nicht steuerbar)', totals.depositTotal)
-    totalLine('Zu zahlen', totals.payableTotal, true)
-  }
+  drawTableHeader()
+  const rows = getItems(invoice).map((item, index) => {
+    const quantity = Number(item.quantity) || 0
+    const unit = Number(item.unitPrice) || 0
+    return { index: index + 1, ...describeItem(item), quantity, unit, sum: quantity * unit }
+  })
+  // Hat der Beleg schon eine Versandposition, bleibt nur ein möglicher Rundungsrest übrig.
+  const hasShippingLine = getItems(invoice).some((item) => item?.isShipping === true || String(item?.productCategory || '').trim().toLowerCase() === 'versand')
+  if (totals.extraNet > (hasShippingLine ? 0.05 : 0)) rows.push({ index: rows.length + 1, title: hasShippingLine ? 'Sonstiges' : 'Versand', details: hasShippingLine ? '' : invoice.shippingMethod || '', quantity: 1, unit: totals.extraNet, sum: totals.extraNet })
+  rows.forEach((row, rowIndex) => {
+    pdf.font('Helvetica-Bold').fontSize(9.5)
+    const titleHeight = pdf.heightOfString(row.title, { width: columns[1].width })
+    pdf.font('Helvetica').fontSize(7.5)
+    const detailHeight = row.details ? pdf.heightOfString(row.details, { width: columns[1].width }) + 2 : 0
+    const rowHeight = Math.max(titleHeight + detailHeight, 12) + 14
+    ensureSpace(rowHeight, true)
+    if (rowIndex % 2 === 1) pdf.rect(left, y, width, rowHeight).fillColor(tint).fill()
+    const top = y + 7
+    text(row.index, columns[0].x, top, { width: columns[0].width }, { size: 9, color: muted })
+    text(row.title, columns[1].x, top, { width: columns[1].width }, { bold: true, size: 9.5 })
+    if (row.details) text(row.details, columns[1].x, top + titleHeight + 2, { width: columns[1].width }, { size: 7.5, color: muted })
+    text(row.quantity.toLocaleString('de-DE'), columns[2].x, top, { width: columns[2].width, align: 'right' }, { size: 9.5 })
+    text(euro(row.unit), columns[3].x, top, { width: columns[3].width, align: 'right' }, { size: 9.5 })
+    text(`${totals.vatRate} %`, columns[4].x, top, { width: columns[4].width, align: 'right' }, { size: 9, color: muted })
+    text(euro(row.sum), columns[5].x, top, { width: columns[5].width, align: 'right' }, { bold: true, size: 9.5 })
+    y += rowHeight
+    pdf.moveTo(left, y).lineTo(right, y).lineWidth(0.5).strokeColor(line).stroke()
+  })
+  text('Alle Einzelpreise netto zzgl. Umsatzsteuer.', left, y + 6, { width }, { size: 7.5, color: muted })
+  y += 26
+
+  // Summenblock
+  const totalRows = [
+    ['Summe netto', totals.netTotal],
+    [`Umsatzsteuer ${totals.vatRate} %`, totals.taxTotal],
+    ['Gesamtbetrag brutto', totals.grossTotal, 'bold'],
+    totals.depositTotal > 0 ? ['zzgl. Pfand (nicht steuerbar)', totals.depositTotal] : null,
+  ].filter(Boolean)
+  ensureSpace(totalRows.length * 17 + 46)
+  const totalsX = 315
+  totalRows.forEach(([label, value, style]) => {
+    if (style === 'bold') {
+      pdf.moveTo(totalsX, y - 3).lineTo(right, y - 3).lineWidth(0.6).strokeColor(line).stroke()
+      y += 2
+    }
+    text(label, totalsX, y, { width: 150 }, { size: 9.5, bold: style === 'bold', color: style === 'bold' ? ink : muted })
+    text(euro(value), right - 80, y, { width: 80, align: 'right' }, { size: 9.5, bold: style === 'bold' })
+    y += 17
+  })
+  y += 4
+  pdf.roundedRect(totalsX - 8, y, right - totalsX + 8, 30, 6).fillColor(accent).fill()
+  text(invoice.paymentStatus === 'paid' ? 'Bezahlt' : 'Zu zahlen', totalsX, y + 10, { width: 120 }, { bold: true, size: 11, color: '#ffffff' })
+  text(euro(totals.payableTotal), right - 120, y + 10, { width: 112, align: 'right' }, { bold: true, size: 11, color: '#ffffff' })
+  y += 48
+
+  // Zahlungshinweis
+  ensureSpace(80)
   if (invoice.paymentStatus === 'paid') {
-    pdf.font('Helvetica-Bold').fontSize(10).fillColor('#2e7d32').text('Der Betrag wurde bereits bezahlt.', 48, y + 6)
+    pdf.roundedRect(left, y, width, 34, 6).fillColor('#eaf4ea').fill()
+    text(`Der Rechnungsbetrag wurde bereits${invoice.paymentMethod ? ` per ${invoice.paymentMethod}` : ''} bezahlt. Vielen Dank!`, left + 14, y + 12, { width: width - 28 }, { bold: true, size: 9.5, color: '#2e6b33' })
+    y += 50
   } else {
-    pdf.font('Helvetica').fontSize(10).fillColor('#202628')
-      .text(`Bitte überweisen Sie ${euro(totals.payableTotal)} unter Angabe von „${invoice.paymentReference || invoice.number}“${company.iban ? ` auf IBAN ${company.iban}.` : '.'}`, 48, y + 6, { width: 499 })
+    const bank = [
+      ['Empfänger', company.name],
+      company.iban ? ['IBAN', formatIban(company.iban)] : null,
+      ['Verwendungszweck', invoice.paymentReference || invoice.number],
+      ['Betrag', euro(totals.payableTotal)],
+      invoice.dueDate ? ['Zahlbar bis', germanDate(invoice.dueDate)] : null,
+    ].filter(Boolean)
+    const boxHeight = 30 + bank.length * 14
+    pdf.roundedRect(left, y, width, boxHeight, 6).lineWidth(0.8).strokeColor(line).stroke()
+    text('Bitte überweisen Sie den Betrag auf folgendes Konto:', left + 14, y + 10, { width: width - 28 }, { bold: true, size: 9.5 })
+    bank.forEach(([label, value], index) => {
+      text(label, left + 14, y + 28 + index * 14, { width: 110 }, { size: 9, color: muted })
+      text(value, left + 130, y + 28 + index * 14, { width: width - 144 }, { size: 9, bold: label === 'IBAN' || label === 'Verwendungszweck' })
+    })
+    y += boxHeight + 16
   }
 
-  const legalDetails = [
-    company.managingDirectors && `Geschäftsführer: ${company.managingDirectors}`,
-    company.legalForm && `Rechtsform: ${company.legalForm}`,
-    company.registeredOffice && `Sitz: ${company.registeredOffice}`,
-    company.commercialRegister && `Handelsregister: ${company.commercialRegister}`,
-    company.registrationCourt && `Registergericht: ${company.registrationCourt}`,
-  ].filter(Boolean).join(' · ')
-  pdf.font('Helvetica').fontSize(7).fillColor('#53595a')
-    .text([
-      `${company.name} · ${company.street}, ${company.postalCode} ${company.city}, ${company.country}`,
-      [company.email, company.phone, company.website].filter(Boolean).join(' · '),
-      [company.taxNumber && `Steuernummer ${company.taxNumber}`, company.vatId && `USt-IdNr. ${company.vatId}`, company.iban && `IBAN ${company.iban}`].filter(Boolean).join(' · '),
-      legalDetails,
-    ].filter(Boolean).join('\n'), 48, 728, { width: 499, align: 'center', lineGap: 2 })
+  // Fußzeile auf jeder Seite
+  const footerColumns = [
+    [company.name, company.street, `${company.postalCode} ${company.city}`, [company.legalForm, company.registeredOffice && `Sitz ${company.registeredOffice}`].filter(Boolean).join(' · ')],
+    [company.managingDirectors && `Geschäftsführer: ${company.managingDirectors}`, [company.registrationCourt, company.commercialRegister].filter(Boolean).join(' · '), company.email, company.website.replace(/^https?:\/\//, '')],
+    [company.iban && `IBAN ${formatIban(company.iban)}`, company.taxNumber && `St.-Nr. ${company.taxNumber}`, company.vatId && `USt-IdNr. ${company.vatId}`, company.phone && `Tel. ${company.phone}`],
+  ].map((lines) => lines.filter(Boolean))
+  const footerX = [0, 145, 352]
+  const footerWidths = [138, 200, width - 352]
+  const range = pdf.bufferedPageRange()
+  for (let page = range.start; page < range.start + range.count; page += 1) {
+    pdf.switchToPage(page)
+    pdf.page.margins.bottom = 0
+    const footerY = 752
+    pdf.moveTo(left, footerY - 8).lineTo(right, footerY - 8).lineWidth(0.5).strokeColor(line).stroke()
+    footerColumns.forEach((lines, index) => {
+      let lineY = footerY
+      lines.forEach((entry, lineIndex) => {
+        pdf.font(lineIndex === 0 && index === 0 ? 'Helvetica-Bold' : 'Helvetica').fontSize(7).fillColor(muted)
+        pdf.text(entry, left + footerX[index], lineY, { width: footerWidths[index], lineGap: 0.5 })
+        lineY = pdf.y + 0.5
+      })
+    })
+    pdf.font('Helvetica').fontSize(7).fillColor(muted)
+      .text(`Seite ${page - range.start + 1} von ${range.count}`, left, 812, { width, align: 'right', lineBreak: false })
+  }
   pdf.end()
 })
 

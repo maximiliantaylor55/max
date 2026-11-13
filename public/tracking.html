@@ -4,12 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#07111f">
-    <meta name="description" content="Verfolge deine ZYRO-Bestellung und öffne die Sendungsverfolgung deines Versanddienstes.">
+    <meta name="description" content="Verfolge deine ZYRO-Bestellung: aktueller Versandstatus und Sendungsverlauf.">
     <title>Sendungsverfolgung · ZYRO</title>
     <meta name="robots" content="noindex, nofollow">
     <link rel="stylesheet" href="/fonts/fonts.css?v=1" />
-    <link rel="stylesheet" href="/tracking.css?v=2">
-    <script src="/tracking.js?v=2" defer></script>
+    <link rel="stylesheet" href="/tracking.css?v=4">
+    <script src="/tracking.js?v=6" defer></script>
   </head>
   <body>
     <main class="tracking-shell">
@@ -17,18 +17,20 @@
       <section class="tracking-card" aria-labelledby="tracking-title">
         <p class="eyebrow">Deine Bestellung</p>
         <h1 id="tracking-title">Sendungsverfolgung</h1>
-        <p class="intro">Hier findest du den Versandstatus und den direkten Tracking-Link deines Versanddienstes.</p>
+        <p class="intro">Hier siehst du, wo dein Paket gerade ist und ob es schon zugestellt wurde.</p>
         <div id="tracking-status" class="notice" role="status" aria-live="polite">
           Sendungsdaten werden sicher geladen …
         </div>
         <div id="tracking-result" class="tracking-result" hidden>
           <div class="status-line">
-            <span class="status-check" aria-hidden="true">✓</span>
+            <span id="status-check" class="status-check" aria-hidden="true">✓</span>
             <div>
               <span class="eyebrow">Versandstatus</span>
               <strong id="shipment-status">Versendet</strong>
             </div>
           </div>
+          <p id="delivered-note" class="delivered-note" hidden></p>
+          <ol id="tracking-steps" class="tracking-steps" aria-label="Sendungsfortschritt"></ol>
           <dl>
             <div><dt>Auftragsnummer</dt><dd id="order-number"></dd></div>
             <div><dt>Versanddienst</dt><dd id="carrier"></dd></div>
@@ -36,11 +38,14 @@
             <div><dt>Versendet am</dt><dd id="shipped-at"></dd></div>
           </dl>
           <div id="carrier-status" hidden>
-            <h2>Status beim Versanddienst</h2>
+            <h2>Sendungsverlauf</h2>
             <p id="carrier-status-text"></p>
             <ol id="carrier-events"></ol>
           </div>
-          <a id="carrier-link" class="track-button" hidden target="_blank" rel="noopener noreferrer">Sendung beim Versanddienst verfolgen</a>
+          <div class="refresh-row">
+            <button type="button" id="tracking-refresh" class="refresh-button">Status jetzt prüfen</button>
+            <span id="tracking-checked-at" class="checked-at" aria-live="polite"></span>
+          </div>
         </div>
         <form id="tracking-form" class="tracking-form">
           <label for="tracking-token">Persönlicher Tracking-Code</label>

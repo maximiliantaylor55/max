@@ -26,6 +26,7 @@ const {
   validateCompletedPaypalOrder,
 } = require('./paypal-helpers.cjs')
 const { hashReviewToken, getReviewPersistenceState, isDhlDelivered, getReviewProducts, validateReviewSubmission } = require('./review-workflow.cjs')
+const { describeShipmentPhase } = require('./shipment-phase.cjs')
 const { validateContactMessage } = require('./contact-validation.cjs')
 const { validateFinanceEntries } = require('./finance-validation.cjs')
 const { createPurchaseReceipt, validatePurchaseOrders, validateSuppliers } = require('./erp-purchasing.cjs')
@@ -40,7 +41,6 @@ const {
   validateFinanceReceiptContent,
   validateFinanceReceiptUpload,
 } = require('./finance-receipt-validation.cjs')
-const { validateElsterSetupEntries } = require('./elster-validation.cjs')
 const { validateCompanyDetailsEntries, defaultCompanyDetails } = require('./company-details.cjs')
 const { validateBottlerDetailsEntries } = require('./bottler-details.cjs')
 const { validateSalesDocumentEmail } = require('./sales-document-email.cjs')
@@ -629,7 +629,7 @@ const syncOrderToDesktop = async (orderId, order, paymentStatus) => {
       const documentDate = new Date().toISOString().slice(0, 10)
       const year = documentDate.slice(0, 4)
       const lastNumber = documents
-        .filter((entry) => entry.kind === 'kundenauftrag')
+        .filter((entry) => entry.kind === 'kundenauftrag' && !entry.manualShipment)
         .reduce((highest, entry) => Math.max(highest, Number(String(entry.number || '').split('-').at(-1)) || 0), 0)
       const items = order.items.map((item) => {
         const product = productList.find((entry) => slugify(entry.sku || entry.name) === item.productId)
@@ -653,6 +653,25 @@ const syncOrderToDesktop = async (orderId, order, paymentStatus) => {
           expectedDeliveryDate: item.expectedDeliveryDate || '',
         }
       })
+      // Versand als eigene Position – Betrag so, wie ihn der Shop berechnet hat.
+      const shippingCents = Number(order.shippingPriceCents) || 0
+      if (shippingCents > 0) {
+        const shippingArticle = productList.find((entry) => String(entry.category || '').trim().toLowerCase() === 'versand')
+        const shippingNet = order.pricesIncludeVat === false ? shippingCents / 100 : shippingCents / 100 / (1 + vatRate / 100)
+        const shippingLabel = order.shippingMethod || 'DPD Paket (bis 31,5 kg)'
+        const shippingName = shippingArticle?.name || 'Versand'
+        items.push({
+          productId: shippingArticle?.id ?? '',
+          productName: shippingName,
+          productSku: shippingArticle?.sku || '',
+          productCategory: 'Versand',
+          productVolume: '',
+          description: [shippingName, shippingLabel].filter(Boolean).join(' · '),
+          quantity: 1,
+          unitPrice: Math.round(shippingNet * 100) / 100,
+          isShipping: true,
+        })
+      }
       const first = items[0]
       const depositCents = Number(order.depositCents) || 0
       const netTotal = (order.totalPriceCents - depositCents - order.vatCents) / 100
@@ -1051,6 +1070,21 @@ const completePublicOrder = async ({ order, shop, paymentStatus, skipEmail = fal
           invoice: data.invoice ? { number: data.invoice.number, sentAt: data.invoice.sentAt?.toDate?.().toISOString?.() || '' } : null,
         }
       }).sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      // Versanddaten stehen im Kundenauftrag des Programms (gleiche ID wie die Shop-Bestellung).
+      const { value: salesValue } = await readCloudAppData('zyro-sales-documents').catch(() => ({ value: [] }))
+      const salesByOrder = new Map((Array.isArray(salesValue) ? salesValue : [])
+        .filter((entry) => entry?.websiteOrderId)
+        .map((entry) => [String(entry.websiteOrderId), entry]))
+      orders.forEach((order) => {
+        const salesDocument = salesByOrder.get(order.id)
+        if (salesDocument?.trackingNumber) {
+          order.trackingProvider = salesDocument.carrier || order.trackingProvider
+          order.trackingNumber = salesDocument.trackingNumber
+        }
+        order.shippedAt = salesDocument?.shippedAt || ''
+        order.delivered = Boolean(salesDocument?.deliveryConfirmedAt)
+        order.shipmentPhase = describeShipmentPhase({ shipped: Boolean(order.trackingNumber), delivered: order.delivered }).phaseLabel
+      })
       const invoiceSnapshot = await db.collection('customerPortalInvoices').where('email', '==', session.email).limit(200).get()
       const invoices = invoiceSnapshot.docs.map((document) => ({
         id: document.id,
@@ -1060,6 +1094,87 @@ const completePublicOrder = async ({ order, shop, paymentStatus, skipEmail = fal
       return response.json({ orders, invoices })
     } catch {
       return response.status(500).json({ error: 'Bestellungen konnten nicht geladen werden.' })
+    }
+  })
+
+  // Sendungsverfolgung im Kundenkonto: Status kommt direkt von DPD/DHL, keine Weiterleitung.
+  exports.customerPortalTracking = onRequest({
+    region,
+    cors: false,
+    maxInstances: 5,
+    timeoutSeconds: 30,
+    secrets: [orderAdminToken],
+  }, async (request, response) => {
+    setCors(request, response)
+    response.set('Cache-Control', 'no-store')
+    if (request.method === 'OPTIONS') return response.status(204).send('')
+    if (request.method !== 'POST') return sendMethodError(response)
+    const session = await getCustomerSession(request)
+    if (!session) return response.status(401).json({ error: 'Bitte erneut anmelden.' })
+    const orderId = String(request.body?.orderId || '')
+    if (!/^[A-Za-z0-9]{10,40}$/.test(orderId)) return response.status(400).json({ error: 'Bestellung ungültig.' })
+    try {
+      const portalSnapshot = await db.collection('customerPortalOrders').doc(orderId).get()
+      if (!portalSnapshot.exists || portalSnapshot.data().email !== session.email) {
+        return response.status(404).json({ error: 'Bestellung nicht gefunden.' })
+      }
+      const portal = portalSnapshot.data()
+      const { value } = await readCloudAppData('zyro-sales-documents')
+      const salesDocument = (Array.isArray(value) ? value : []).find((entry) => String(entry?.websiteOrderId || '') === orderId)
+      const carrier = String(salesDocument?.carrier || portal.trackingProvider || '')
+      const trackingNumber = String(salesDocument?.trackingNumber || portal.trackingNumber || '')
+      const shipped = Boolean(trackingNumber) || salesDocument?.status === 'Versendet'
+      let delivered = Boolean(salesDocument?.deliveryConfirmedAt)
+
+      let carrierStatus = null
+      if (trackingNumber) {
+        const cached = portal.trackingCache
+        if (cached && cached.trackingNumber === trackingNumber && Date.now() - Number(cached.at || 0) < 5 * 60 * 1000) {
+          carrierStatus = cached.status || null
+        } else {
+          carrierStatus = await loadCarrierStatus(carrier, trackingNumber)
+          if (carrierStatus) {
+            await portalSnapshot.ref.set({ trackingCache: { at: Date.now(), trackingNumber, status: carrierStatus } }, { merge: true }).catch(() => {})
+          }
+        }
+      }
+      if (carrierStatus?.delivered) delivered = true
+      // Zustellung erkannt: wie im Programm bestätigen und die Bewertungsanfrage auslösen.
+      if (carrierStatus?.delivered && salesDocument && !salesDocument.deliveryConfirmedAt && salesDocument.status === 'Versendet') {
+        try {
+          await confirmOrderDelivery(salesDocument.id, carrier.toUpperCase().startsWith('DHL') ? 'DHL' : 'DPD')
+          const { products: shopProducts } = await readShopConfig()
+          await sendDeliveryReviewRequest(salesDocument.id, shopProducts)
+        } catch (error) {
+          console.warn('Zustellbestätigung aus dem Kundenkonto fehlgeschlagen:', error.message)
+        }
+      }
+
+      const carrierLabel = carrier || 'dem Versanddienst'
+      return response.json({
+        tracking: {
+          orderNumber: String(portal.orderNumber || ''),
+          carrier,
+          trackingNumber,
+          shippedAt: String(salesDocument?.shippedAt || ''),
+          delivered,
+          ...describeShipmentPhase({ shipped, delivered, status: carrierStatus?.status, description: carrierStatus?.description }),
+          current: carrierStatus
+            ? { status: String(carrierStatus.status || ''), description: String(carrierStatus.description || ''), location: String(carrierStatus.location || ''), timestamp: String(carrierStatus.timestamp || '') }
+            : null,
+          events: (Array.isArray(carrierStatus?.events) ? carrierStatus.events : []).slice(0, 20).map((event) => ({
+            description: String(event.description || ''),
+            location: String(event.location || ''),
+            timestamp: String(event.timestamp || ''),
+          })),
+          message: !trackingNumber
+            ? 'Deine Bestellung wird gerade vorbereitet. Sobald das Paket übergeben ist, siehst du hier den Status.'
+            : (!carrierStatus ? `${carrierLabel} hat noch keinen Status gemeldet. Nach der Übergabe kann das ein paar Stunden dauern.` : ''),
+        },
+      })
+    } catch (error) {
+      console.error('Sendungsverfolgung im Kundenkonto fehlgeschlagen:', error.message)
+      return response.status(500).json({ error: 'Sendungsstatus konnte gerade nicht geladen werden. Bitte später erneut versuchen.' })
     }
   })
 
@@ -2313,6 +2428,7 @@ const cloudDataKeys = new Set([
   'zyro-activation-keys',
   'zyro-products',
   'zyro-recipes',
+  'zyro-raw-materials',
   'zyro-lab-tests',
   'zyro-orders',
   'zyro-sales-documents',
@@ -2322,7 +2438,7 @@ const cloudDataKeys = new Set([
   'zyro-payment-requests',
   'zyro-payment-settings',
   'zyro-cost-calculations',
-  'zyro-elster-setup',
+  'zyro-contract-jobs',
   'zyro-company-details',
   'zyro-bottler-details',
   'zyro-website-orders',
@@ -2432,6 +2548,7 @@ const webAppWritableKeys = new Set([...webAppDataKeys].filter((key) => key !== '
 const webAppPermissions = {
   'zyro-products': ['produkte', 'mde'],
   'zyro-recipes': 'rezepturen',
+  'zyro-raw-materials': 'rezepturen',
   'zyro-lab-tests': 'rezepturen',
   'zyro-orders': 'bestellungen',
   'zyro-sales-documents': ['verkauf', 'mde', 'versand'],
@@ -2440,6 +2557,7 @@ const webAppPermissions = {
   'zyro-finance-entries': 'finanzen',
   'zyro-payment-requests': 'zahlungen',
   'zyro-cost-calculations': 'kalkulation',
+  'zyro-contract-jobs': 'lohnherstellung',
   'zyro-website-orders': 'bestellungen',
   'zyro-customers': 'kunden',
   'zyro-customer-letters': 'kunden',
@@ -2785,10 +2903,6 @@ const validateWebAppWrite = (key, currentValue, nextValue, actor, allowScheduleR
     }
     return
   }
-  if (key === 'zyro-elster-setup') {
-    validateElsterSetupEntries(currentValue, nextValue, actor)
-    return
-  }
   // Inhalt prüfen; Berechtigung „dokumente“ und Lösch-Schutz folgen in der allgemeinen Prüfung unten.
   if (key === 'zyro-qm-documents') validateQmDocumentEntries(nextValue)
   if (key === 'zyro-company-details') {
@@ -3130,8 +3244,102 @@ exports.cloudData = onRequest({
   }
 })
 
+const applyOrderPacking = ({ data, document, packedLines, actor }) => {
+  const timestamp = new Date().toISOString()
+  document.pickedLots = []
+  for (const { product, quantity } of packedLines) {
+    product.availableBottles -= quantity
+    const picked = allocateFefo(product, quantity)
+    for (const entry of picked) document.pickedLots.push({ productId: product.id, productName: product.name || '', ...entry })
+    data['zyro-stock-movements'].unshift(createStockMovement({
+      type: 'Warenausgang',
+      product,
+      quantity,
+      actor,
+      note: picked.map((entry) => `${entry.quantity}× ${entry.lot || 'ohne Charge'}${entry.bestBefore ? ` (MHD ${entry.bestBefore})` : ''}`).join(', '),
+      referenceType: 'kundenauftrag',
+      referenceId: document.id,
+      referenceNumber: document.number || String(document.id),
+    }))
+  }
+  document.status = 'Verpackt'
+  document.packedAt = timestamp
+  document.packedBy = actor.name || actor.username || 'Zyro-Benutzer'
+  document.shippingLabelCreatedAt = timestamp
+  document.shippingLabelCreatedBy = document.packedBy
+  document.packedNotificationStatus = 'pending'
+  document.packedNotificationError = ''
+  const { invoice, created } = createInvoiceFromOrder({
+    order: document,
+    documents: data['zyro-sales-documents'],
+    products: data['zyro-products'],
+    responsibleName: document.packedBy,
+  })
+  if (created) data['zyro-sales-documents'].unshift(invoice)
+  document.invoiceDocumentId = invoice.id
+  document.invoiceNumber = invoice.number
+  return invoice
+}
+
 const mdeDataKeys = ['zyro-products', 'zyro-sales-documents', 'zyro-stock-movements', 'zyro-purchase-orders']
 const mdeError = (message, statusCode = 400) => Object.assign(new Error(message), { statusCode })
+
+const dpdLabelsRef = db.collection('dpdLabels')
+
+// Erzeugt bei labelMode "dpd" ein echtes DPD-Label und setzt Versanddienst + Sendungsnummer im Request.
+const applyDpdLabelRequest = async (request, { orderId = '', manual = null } = {}) => {
+  if (request.body?.labelMode !== 'dpd') return null
+  const { createDpdLabel, parseShippingAddress } = require('./dpd.cjs')
+  const settings = (await dpdConfigRef.get()).data() || {}
+  if (!settings.credentialsCiphertext) throw mdeError('Bitte zuerst den DPD-Webservice unter „Versand & Tracking“ einrichten.', 400)
+  const credentials = decryptDpdCredentials(settings)
+  let source = manual
+  if (!source) {
+    const { value } = await readCloudAppData('zyro-sales-documents')
+    const document = (Array.isArray(value) ? value : []).find((entry) => String(entry.id) === String(orderId))
+    if (!document) throw mdeError('Kundenauftrag wurde in der Cloud nicht gefunden.', 404)
+    if (document.trackingNumber && document.carrier === 'DPD' && document.dpdParcelLabelNumber) {
+      throw mdeError(`Für diesen Auftrag gibt es bereits das DPD-Label ${document.dpdParcelLabelNumber}.`, 409)
+    }
+    source = {
+      recipient: document.recipient,
+      address: document.shippingAddress || document.recipientAddress,
+      email: document.recipientEmail,
+      phone: document.recipientPhone,
+      reference: document.number || String(document.id),
+    }
+  }
+  const recipient = parseShippingAddress(source)
+  const { value: savedCompanyDetails } = await readCloudAppData('zyro-company-details')
+  const company = Array.isArray(savedCompanyDetails) && savedCompanyDetails.length
+    ? validateCompanyDetailsEntries(savedCompanyDetails, { role: 'admin' })
+    : defaultCompanyDetails
+  const label = await createDpdLabel({
+    credentials,
+    company: company || defaultCompanyDetails,
+    recipient,
+    weightKg: Number(String(request.body?.weightKg ?? '').replace(',', '.')),
+    product: String(request.body?.dpdProduct || 'CL'),
+    reference: source.reference,
+  })
+  await dpdLabelsRef.doc(label.parcelLabelNumber).set({
+    orderId: String(orderId || ''),
+    reference: String(source.reference || ''),
+    contentBase64: label.labelPdfBase64,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  })
+  request.body.carrier = 'DPD'
+  request.body.carrierName = ''
+  request.body.trackingNumber = label.parcelLabelNumber
+  return label
+}
+
+const markDpdLabel = (document, label) => {
+  if (!label || !document) return
+  document.dpdParcelLabelNumber = label.parcelLabelNumber
+  document.shippingLabelProvider = 'DPD'
+  document.shippingLabelCreatedAt = new Date().toISOString()
+}
 
 const runMdeCloudUpdate = async (keys, update) => db.runTransaction(async (transaction) => {
   const manifest = (await transaction.get(cloudManifestRef)).data() || {}
@@ -3323,6 +3531,18 @@ const updateShipmentNotification = async (orderId, transform) => runMdeCloudUpda
   },
 )
 
+const carrierTrackingUrl = (carrier, trackingNumber) => {
+  const number = encodeURIComponent(String(trackingNumber || ''))
+  if (!number) return ''
+  return {
+    DHL: `https://www.dhl.de/de/privatkunden/dhl-sendungsverfolgung.html?piececode=${number}`,
+    DPD: `https://tracking.dpd.de/status/de_DE/parcel/${number}`,
+    GLS: `https://gls-group.com/DE/de/paketverfolgung?match=${number}`,
+    UPS: `https://www.ups.com/track?loc=de_DE&tracknum=${number}`,
+    Hermes: `https://www.myhermes.de/empfangen/sendungsverfolgung/sendungsinformation#${number}`,
+  }[carrier] || ''
+}
+
 const sendShippedOrderNotification = async (orderId) => {
   const claimed = await updateShipmentNotification(orderId, (document) => {
     if (document.shipmentNotificationStatus === 'sent') return
@@ -3345,12 +3565,8 @@ const sendShippedOrderNotification = async (orderId) => {
   const document = claimed.document
   const orderNumber = document.number || document.id
   const trackingLink = `https://xn--zyro-getrnke-ocb.de/tracking/?token=${encodeURIComponent(document.trackingToken)}`
-  const externalTrackingLink = document.trackingUrl
-    || (document.carrier === 'DHL'
-      ? `https://www.dhl.de/de/privatkunden/dhl-sendungsverfolgung.html?piececode=${encodeURIComponent(document.trackingNumber)}`
-      : document.carrier === 'DPD'
-        ? `https://tracking.dpd.de/status/de_DE/parcel/${encodeURIComponent(document.trackingNumber)}`
-        : '')
+  // Kein Link zum Versanddienst: die ZYRO-Tracking-Seite zeigt den Status selbst an.
+  const externalTrackingLink = ''
   const escapedOrderNumber = escapeEmailHtml(orderNumber)
   const escapedCarrier = escapeEmailHtml(document.carrierName || document.carrier)
   const escapedTrackingNumber = escapeEmailHtml(document.trackingNumber)
@@ -3407,6 +3623,7 @@ const updateDeliveryReviewState = (orderId, transform) => runMdeCloudUpdate(
 const confirmOrderDelivery = async (orderId, source) => updateDeliveryReviewState(orderId, (document) => {
   const carrier = String(document.carrier || '').toUpperCase()
   if (source === 'DHL' && carrier !== 'DHL') throw mdeError('Automatische Zustellprüfung ist nur für DHL verfügbar.', 409)
+  if (source === 'DPD' && carrier !== 'DPD') throw mdeError('Automatische DPD-Zustellprüfung ist nur für DPD-Sendungen verfügbar.', 409)
   if (source === 'manual' && carrier === 'DHL') throw mdeError('DHL-Zustellungen werden automatisch geprüft.', 409)
   document.deliveryConfirmedAt ||= new Date().toISOString()
   document.deliveryConfirmationSource ||= source
@@ -3543,10 +3760,10 @@ exports.webAppMde = onRequest({
     } else if (!permissions.includes('lager') && !permissions.includes('mde') && !permissions.includes('versand') && !permissions.includes('verkauf')) {
       return response.status(403).json({ error: 'Du hast keine Berechtigung für MDE-Buchungen.' })
     }
-    if (action !== 'receive-purchase-order' && actor.role !== 'admin' && permissions.includes('verkauf') && !permissions.includes('lager') && !permissions.includes('mde') && !permissions.includes('versand') && action !== 'send-document') {
+    if (action !== 'receive-purchase-order' && actor.role !== 'admin' && permissions.includes('verkauf') && !permissions.includes('lager') && !permissions.includes('mde') && !permissions.includes('versand') && !['send-document', 'direct-shipment', 'dpd-label', 'carrier-status'].includes(action)) {
       return response.status(403).json({ error: 'Du hast keine Berechtigung für diese Verkaufsaktion.' })
     }
-    if (actor.role !== 'admin' && permissions.includes('versand') && !permissions.includes('lager') && !permissions.includes('mde') && !permissions.includes('verkauf') && !['shipment', 'delivery-confirm', 'review-request', 'notify-shipment', 'notify'].includes(action)) {
+    if (actor.role !== 'admin' && permissions.includes('versand') && !permissions.includes('lager') && !permissions.includes('mde') && !permissions.includes('verkauf') && !['shipment', 'manual-shipment', 'direct-shipment', 'dpd-label', 'carrier-status', 'delivery-confirm', 'review-request', 'notify-shipment', 'notify'].includes(action)) {
       return response.status(403).json({ error: 'Du hast keine Berechtigung für diese MDE-Buchung.' })
     }
 
@@ -3737,39 +3954,7 @@ exports.webAppMde = onRequest({
       const result = await runMdeCloudUpdate(mdeDataKeys, (data) => {
         const document = data['zyro-sales-documents'].find((entry) => String(entry.id) === orderId)
         const packedLines = validateMdePacking({ document, products: data['zyro-products'], actorId: actor.id })
-        const timestamp = new Date().toISOString()
-        document.pickedLots = []
-        for (const { product, quantity } of packedLines) {
-          product.availableBottles -= quantity
-          const picked = allocateFefo(product, quantity)
-          for (const entry of picked) document.pickedLots.push({ productId: product.id, productName: product.name || '', ...entry })
-          data['zyro-stock-movements'].unshift(createStockMovement({
-            type: 'Warenausgang',
-            product,
-            quantity,
-            actor,
-            note: picked.map((entry) => `${entry.quantity}× ${entry.lot || 'ohne Charge'}${entry.bestBefore ? ` (MHD ${entry.bestBefore})` : ''}`).join(', '),
-            referenceType: 'kundenauftrag',
-            referenceId: document.id,
-            referenceNumber: document.number || String(document.id),
-          }))
-        }
-        document.status = 'Verpackt'
-        document.packedAt = timestamp
-        document.packedBy = actor.name || actor.username || 'Zyro-Benutzer'
-        document.shippingLabelCreatedAt = timestamp
-        document.shippingLabelCreatedBy = document.packedBy
-        document.packedNotificationStatus = 'pending'
-        document.packedNotificationError = ''
-        const { invoice, created } = createInvoiceFromOrder({
-          order: document,
-          documents: data['zyro-sales-documents'],
-          products: data['zyro-products'],
-          responsibleName: document.packedBy,
-        })
-        if (created) data['zyro-sales-documents'].unshift(invoice)
-        document.invoiceDocumentId = invoice.id
-        document.invoiceNumber = invoice.number
+        const invoice = applyOrderPacking({ data, document, packedLines, actor })
         return {
           invoiceId: invoice.id,
           invoiceProducts: data['zyro-products'],
@@ -3817,7 +4002,48 @@ exports.webAppMde = onRequest({
       })
     }
 
+    if (action === 'carrier-status') {
+      const orderId = String(request.body?.orderId || '')
+      const { value } = await readCloudAppData('zyro-sales-documents')
+      const document = (Array.isArray(value) ? value : []).find((entry) => String(entry.id) === orderId)
+      if (!document?.trackingNumber) return response.status(404).json({ error: 'Für diesen Auftrag gibt es keine Sendungsnummer.' })
+      const carrier = String(document.carrier || '').toUpperCase()
+      let status = null
+      if (carrier === 'DPD') {
+        const { trackDpdParcel } = require('./dpd.cjs')
+        const settings = (await dpdConfigRef.get()).data() || {}
+        status = await trackDpdParcel({ parcelLabelNumber: document.trackingNumber, credentials: settings.credentialsCiphertext ? decryptDpdCredentials(settings) : null })
+      } else if (carrier === 'DHL') {
+        const dhl = await fetchDhlStatus(document.trackingNumber)
+        status = dhl ? { ...dhl, delivered: isDhlDelivered(dhl) } : null
+      } else {
+        return response.status(400).json({ error: 'Automatische Sendungsverfolgung gibt es nur für DPD und DHL.' })
+      }
+      if (!status) return response.json({ status: null, message: 'Der Versanddienst hat noch keinen Status gemeldet.' })
+      const result = { status: { status: status.status, description: status.description, location: status.location, timestamp: status.timestamp, delivered: Boolean(status.delivered) } }
+      if (status.delivered && !document.deliveryConfirmedAt && document.status === 'Versendet') {
+        await confirmOrderDelivery(document.id, carrier)
+        const { products: shopProducts } = await readShopConfig()
+        const reviewResult = await sendDeliveryReviewRequest(document.id, shopProducts)
+        result.salesDocuments = reviewResult.salesDocuments
+        result.reviewEmailSent = reviewResult.sent
+        if (reviewResult.error) result.reviewEmailError = reviewResult.error
+      }
+      return response.json(result)
+    }
+
+    if (action === 'dpd-label') {
+      const orderId = String(request.body?.orderId || '')
+      const { value } = await readCloudAppData('zyro-sales-documents')
+      const document = (Array.isArray(value) ? value : []).find((entry) => String(entry.id) === orderId)
+      if (!document?.dpdParcelLabelNumber) return response.status(404).json({ error: 'Für diesen Auftrag gibt es kein gespeichertes DPD-Label.' })
+      const label = (await dpdLabelsRef.doc(document.dpdParcelLabelNumber).get()).data()
+      if (!label?.contentBase64) return response.status(404).json({ error: 'Das DPD-Label wurde nicht gefunden.' })
+      return response.json({ parcelLabelNumber: document.dpdParcelLabelNumber, labelPdfBase64: label.contentBase64 })
+    }
+
     if (action === 'shipment') {
+      const dpdLabel = await applyDpdLabelRequest(request, { orderId: String(request.body?.orderId || '') })
       const orderId = String(request.body?.orderId || '')
       const carrier = String(request.body?.carrier || '')
       const carrierName = String(request.body?.carrierName || '')
@@ -3829,8 +4055,10 @@ exports.webAppMde = onRequest({
       const result = await runMdeCloudUpdate(['zyro-sales-documents'], ({ 'zyro-sales-documents': salesDocuments }) => {
         const document = salesDocuments.find((entry) => String(entry.id) === orderId)
         validateShipment({ document, carrier, carrierName, trackingNumber, trackingUrl })
+        markDpdLabel(document, dpdLabel)
         return { salesDocuments, orderId: document.id }
       })
+      if (dpdLabel) Object.assign(result, { parcelLabelNumber: dpdLabel.parcelLabelNumber, labelPdfBase64: dpdLabel.labelPdfBase64 })
       try {
         const emailResult = await sendShippedOrderNotification(result.orderId)
         result.salesDocuments = emailResult.salesDocuments
@@ -3840,6 +4068,130 @@ exports.webAppMde = onRequest({
         result.emailSent = false
         result.emailError = error.message || 'Versand-E-Mail konnte nicht verarbeitet werden.'
       }
+      return response.json(result)
+    }
+
+    if (action === 'direct-shipment') {
+      if (actor.role !== 'admin' && !permissions.includes('versand') && !permissions.includes('verkauf') && !permissions.includes('lager')) {
+        return response.status(403).json({ error: 'Für den Versand brauchst du die Versand- oder Verkaufsberechtigung.' })
+      }
+      const orderId = String(request.body?.orderId || '')
+      if (!orderId || orderId.length > 200) return response.status(400).json({ error: 'Auftrags-ID ungültig.' })
+      const notifyCustomer = request.body?.notifyCustomer !== false
+      const dpdLabel = await applyDpdLabelRequest(request, { orderId })
+      const result = await runMdeCloudUpdate(mdeDataKeys, (data) => {
+        const document = data['zyro-sales-documents'].find((entry) => String(entry.id) === orderId)
+        const packedLines = validateMdePacking({ document, products: data['zyro-products'], actorId: actor.id, direct: true })
+        const invoice = applyOrderPacking({ data, document, packedLines, actor })
+        document.packedNotificationStatus = 'skipped'
+        document.directShipment = true
+        validateShipment({
+          document,
+          carrier: String(request.body?.carrier || ''),
+          carrierName: String(request.body?.carrierName || ''),
+          trackingNumber: String(request.body?.trackingNumber || ''),
+          trackingUrl: String(request.body?.trackingUrl || ''),
+        })
+        if (!notifyCustomer) document.shipmentNotificationStatus = 'skipped'
+        markDpdLabel(document, dpdLabel)
+        return {
+          invoiceId: invoice.id,
+          invoiceProducts: data['zyro-products'],
+          products: data['zyro-products'],
+          salesDocuments: data['zyro-sales-documents'],
+          stockMovements: data['zyro-stock-movements'],
+          orderId: document.id,
+          orderNumber: document.number || String(document.id),
+        }
+      })
+      const invoiceResult = await deliverAutoInvoice(result.invoiceId, result.invoiceProducts)
+      result.invoiceNumber = invoiceResult.number
+      result.invoiceEmailSent = invoiceResult.emailSent
+      if (invoiceResult.error) result.invoiceError = invoiceResult.error
+      if (invoiceResult.salesDocuments) result.salesDocuments = invoiceResult.salesDocuments
+      result.emailSent = false
+      if (notifyCustomer) {
+        try {
+          const emailResult = await sendShippedOrderNotification(result.orderId)
+          result.salesDocuments = emailResult.salesDocuments
+          result.emailSent = emailResult.sent
+          if (!emailResult.sent) result.emailError = emailResult.error
+        } catch (error) {
+          result.emailError = error.message || 'Versand-E-Mail konnte nicht verarbeitet werden.'
+        }
+      }
+      delete result.invoiceId
+      delete result.invoiceProducts
+      if (dpdLabel) Object.assign(result, { parcelLabelNumber: dpdLabel.parcelLabelNumber, labelPdfBase64: dpdLabel.labelPdfBase64 })
+      return response.json(result)
+    }
+
+    if (action === 'manual-shipment') {
+      if (actor.role !== 'admin' && !permissions.includes('versand') && !permissions.includes('mde') && !permissions.includes('lager')) {
+        return response.status(403).json({ error: 'Für Sendungen brauchst du die Versand-Berechtigung.' })
+      }
+      const body = request.body || {}
+      const recipient = String(body.recipient || '').trim().slice(0, 160)
+      const recipientEmail = String(body.recipientEmail || '').trim().toLowerCase().slice(0, 254)
+      const recipientAddress = String(body.recipientAddress || '').trim().slice(0, 500)
+      const reference = String(body.reference || '').trim().slice(0, 120)
+      const note = String(body.note || '').trim().slice(0, 1000)
+      const notifyCustomer = body.notifyCustomer !== false
+      if (!recipient) return response.status(400).json({ error: 'Bitte den Empfänger eintragen.' })
+      if (recipientEmail && !isValidEmailAddress(recipientEmail)) return response.status(400).json({ error: 'Die E-Mail-Adresse ist ungültig.' })
+      if (notifyCustomer && !recipientEmail) return response.status(400).json({ error: 'Für die Versand-E-Mail wird die E-Mail-Adresse des Empfängers benötigt.' })
+      const dpdLabel = await applyDpdLabelRequest(request, {
+        manual: { recipient, address: recipientAddress, email: recipientEmail, phone: String(body.recipientPhone || '').slice(0, 40), reference: reference || recipient },
+      })
+      const result = await runMdeCloudUpdate(['zyro-sales-documents'], ({ 'zyro-sales-documents': salesDocuments }) => {
+        const now = new Date().toISOString()
+        const year = now.slice(0, 4)
+        const lastNumber = salesDocuments
+          .filter((entry) => String(entry.number || '').startsWith(`VS-${year}-`))
+          .reduce((highest, entry) => Math.max(highest, Number(String(entry.number).split('-').at(-1)) || 0), 0)
+        const document = {
+          id: crypto.randomUUID(),
+          kind: 'kundenauftrag',
+          source: 'manuell',
+          manualShipment: true,
+          number: `VS-${year}-${String(lastNumber + 1).padStart(4, '0')}`,
+          recipient,
+          recipientEmail,
+          recipientAddress,
+          shippingAddress: recipientAddress,
+          items: [],
+          description: reference || 'Manuelle Sendung',
+          notes: ['Manuell angelegte Sendung', reference ? `Referenz: ${reference}` : '', note].filter(Boolean).join('\n'),
+          responsibleName: String(actor.name || actor.username || ''),
+          documentDate: now.slice(0, 10),
+          createdAt: now,
+          packedAt: now,
+          status: 'Verpackt',
+        }
+        validateShipment({
+          document,
+          carrier: String(body.carrier || ''),
+          carrierName: String(body.carrierName || ''),
+          trackingNumber: String(body.trackingNumber || ''),
+          trackingUrl: String(body.trackingUrl || ''),
+        })
+        if (!notifyCustomer) document.shipmentNotificationStatus = 'skipped'
+        markDpdLabel(document, dpdLabel)
+        salesDocuments.unshift(document)
+        return { salesDocuments, orderId: document.id, number: document.number }
+      })
+      result.emailSent = false
+      if (notifyCustomer) {
+        try {
+          const emailResult = await sendShippedOrderNotification(result.orderId)
+          result.salesDocuments = emailResult.salesDocuments
+          result.emailSent = emailResult.sent
+          if (!emailResult.sent) result.emailError = emailResult.error
+        } catch (error) {
+          result.emailError = error.message || 'Versand-E-Mail konnte nicht verarbeitet werden.'
+        }
+      }
+      if (dpdLabel) Object.assign(result, { parcelLabelNumber: dpdLabel.parcelLabelNumber, labelPdfBase64: dpdLabel.labelPdfBase64 })
       return response.json(result)
     }
 
@@ -3974,13 +4326,38 @@ const fetchDhlStatus = async (trackingNumber) => {
   return value
 }
 
+// Liefert den aktuellen Status von DPD oder DHL inklusive aller bisherigen Stationen.
+const loadCarrierStatus = async (carrier, trackingNumber) => {
+  const code = String(carrier || '').toUpperCase()
+  if (code.startsWith('DPD')) {
+    const { trackDpdParcel } = require('./dpd.cjs')
+    let credentials = null
+    try {
+      const settings = (await dpdConfigRef.get()).data() || {}
+      credentials = settings.credentialsCiphertext ? decryptDpdCredentials(settings) : null
+    } catch (error) {
+      console.warn('DPD-Zugangsdaten konnten nicht gelesen werden:', String(error?.message || error).slice(0, 200))
+      credentials = null
+    }
+    return trackDpdParcel({ parcelLabelNumber: trackingNumber, credentials }).catch(() => null)
+  }
+  if (code.startsWith('DHL')) {
+    const dhl = await fetchDhlStatus(trackingNumber)
+    return dhl ? { ...dhl, delivered: isDhlDelivered(dhl) } : null
+  }
+  return null
+}
+
 exports.sendDeliveredReviewRequests = onSchedule({
   region,
-  schedule: 'every 6 hours',
+  schedule: 'every 3 hours',
   timeZone: 'Europe/Berlin',
   maxInstances: 1,
   timeoutSeconds: 300,
 }, async () => {
+  const { trackDpdParcel } = require('./dpd.cjs')
+  const dpdSettings = (await dpdConfigRef.get().catch(() => null))?.data() || {}
+  const dpdCredentials = dpdSettings.credentialsCiphertext ? decryptDpdCredentials(dpdSettings) : null
   const { value } = await readCloudAppData('zyro-sales-documents')
   const { products: shopProducts } = await readShopConfig()
   const cutoff = Date.now() - 45 * 24 * 60 * 60 * 1000
@@ -3992,7 +4369,7 @@ exports.sendDeliveredReviewRequests = onSchedule({
       if (document.deliveryConfirmedAt) {
         return !['sent', 'submitted', 'skipped', 'failed'].includes(document.reviewRequestStatus)
       }
-      return String(document.carrier || '').toUpperCase() === 'DHL' && Boolean(document.trackingNumber)
+      return ['DHL', 'DPD'].includes(String(document.carrier || '').toUpperCase()) && Boolean(document.trackingNumber)
     })
     .sort((left, right) => String(right.shippedAt || '').localeCompare(String(left.shippedAt || '')))
     .slice(0, 40)
@@ -4000,9 +4377,15 @@ exports.sendDeliveredReviewRequests = onSchedule({
   for (const order of candidates) {
     try {
       if (!order.deliveryConfirmedAt) {
-        const status = await fetchDhlStatus(order.trackingNumber)
-        if (!isDhlDelivered(status)) continue
-        await confirmOrderDelivery(order.id, 'DHL')
+        if (String(order.carrier).toUpperCase() === 'DPD') {
+          const status = await trackDpdParcel({ parcelLabelNumber: order.trackingNumber, credentials: dpdCredentials })
+          if (!status?.delivered) continue
+          await confirmOrderDelivery(order.id, 'DPD')
+        } else {
+          const status = await fetchDhlStatus(order.trackingNumber)
+          if (!isDhlDelivered(status)) continue
+          await confirmOrderDelivery(order.id, 'DHL')
+        }
       }
       const result = await sendDeliveryReviewRequest(order.id, shopProducts)
       if (!result.sent && result.status !== 'skipped') {
@@ -4025,7 +4408,8 @@ exports.publicShipmentTracking = onRequest({
   region,
   cors: false,
   maxInstances: 5,
-  timeoutSeconds: 20,
+  timeoutSeconds: 30,
+  secrets: [orderAdminToken],
 }, async (request, response) => {
   setCors(request, response)
   response.set('Cache-Control', 'no-store')
@@ -4051,7 +4435,39 @@ exports.publicShipmentTracking = onRequest({
     const { value } = await readCloudAppData('zyro-sales-documents')
     const tracking = getPublicShipment({ documents: Array.isArray(value) ? value : [], token })
     if (!tracking) return response.status(404).json({ error: 'Tracking-Link ungültig oder abgelaufen.' })
-    if (String(tracking.carrier).toUpperCase().startsWith('DHL')) tracking.carrierStatus = await fetchDhlStatus(tracking.trackingNumber)
+    // Interne Daten nur serverseitig nutzen, nicht an die öffentliche Seite geben.
+    const shippedDocument = (Array.isArray(value) ? value : []).find((entry) => String(entry?.trackingToken || '') === token)
+    const internalOrderId = shippedDocument ? String(shippedDocument.id || '') : ''
+    tracking.deliveredAt = String(shippedDocument?.deliveryConfirmedAt || '')
+    const status = await loadCarrierStatus(tracking.carrier, tracking.trackingNumber)
+    if (status) {
+      tracking.carrierStatus = {
+        status: String(status.status || ''),
+        description: String(status.description || ''),
+        timestamp: String(status.timestamp || ''),
+        location: String(status.location || ''),
+        events: (Array.isArray(status.events) ? status.events : []).slice(0, 20),
+      }
+    }
+    const delivered = Boolean(tracking.deliveredAt) || Boolean(status?.delivered)
+    // Zustellung neu erkannt: wie im Programm bestätigen und Bewertungsanfrage auslösen.
+    if (status?.delivered && !tracking.deliveredAt && internalOrderId) {
+      try {
+        await confirmOrderDelivery(internalOrderId, String(tracking.carrier).toUpperCase().startsWith('DHL') ? 'DHL' : 'DPD')
+        tracking.deliveredAt = new Date().toISOString()
+        const { products: shopProducts } = await readShopConfig()
+        await sendDeliveryReviewRequest(internalOrderId, shopProducts)
+      } catch (error) {
+        console.warn('Zustellbestätigung über die Tracking-Seite fehlgeschlagen:', error.message)
+      }
+    }
+    tracking.delivered = delivered
+    Object.assign(tracking, describeShipmentPhase({
+      shipped: true,
+      delivered,
+      status: tracking.carrierStatus?.status,
+      description: tracking.carrierStatus?.description,
+    }))
     return response.json({ tracking })
   } catch (error) {
     if (error.statusCode === 429) return response.status(429).json({ error: error.message })
@@ -4247,11 +4663,11 @@ exports.webAppData = onRequest({
       && !(Array.isArray(actor.permissions) ? actor.permissions : defaultWebAppPermissions).includes('rezepturen')) {
       return response.status(403).json({ error: 'Du hast keine Rezeptur-Berechtigung.' })
     }
-    if (key === 'zyro-elster-setup' && actor.role !== 'admin') {
-      return response.status(403).json({ error: 'ELSTER-Einstellungen dürfen nur von einem Admin verwaltet werden.' })
-    }
     if (key === 'zyro-cost-calculations' && actor.role !== 'admin') {
       return response.status(403).json({ error: 'Kalkulationen dürfen nur von einem Admin verwaltet werden.' })
+    }
+    if (key === 'zyro-contract-jobs' && actor.role !== 'admin') {
+      return response.status(403).json({ error: 'Lohnherstellung darf nur von einem Admin verwaltet werden.' })
     }
     if (key === 'zyro-sales-target' && actor.role !== 'admin'
       && !(Array.isArray(actor.permissions) && actor.permissions.includes('analyse'))) {
@@ -5706,7 +6122,15 @@ exports.manageMailbox = onRequest({
   setCors(request, response)
   if (request.method === 'OPTIONS') return response.status(204).send('')
   if (request.method !== 'POST') return sendMethodError(response)
-  if (!requireRootAdmin(request, response)) return
+  if (!verifyRootAdminToken(request)) {
+    let actor = null
+    try {
+      actor = await getWebAppActor(request)
+    } catch (error) {
+      return response.status(401).json({ error: error.message || 'Nicht autorisiert.' })
+    }
+    if (actor?.role !== 'admin') return response.status(403).json({ error: 'Das Postfach ist nur für Admins.' })
+  }
   if (Buffer.byteLength(JSON.stringify(request.body || {})) > 512 * 1024) {
     return response.status(413).json({ error: 'Die Postfachanfrage ist zu groß.' })
   }
@@ -6152,4 +6576,311 @@ exports.sendPublicInvoiceEmail = onRequest({
     if (portalInvoiceRef) await portalInvoiceRef.delete().catch(() => {})
     return response.status(502).json({ error: describeSmtpFailure(error) })
   }
+})
+
+// ---------------------------------------------------------------------------
+// sevDesk: Rechnungen sowie Einnahmen/Ausgaben aus „Finanzen“ als Belege (inkl. PDF/Beleg) übertragen.
+// Manuell (Rechnung einzeln / „Alles übertragen“ im Finanzbereich) und automatisch stündlich.
+// Secret: SEVDESK_API_TOKEN. Einstellungen/Kontenüberschreibungen: Firestore sevdeskSettings/config.
+// ---------------------------------------------------------------------------
+const sevdeskApiToken = defineSecret('SEVDESK_API_TOKEN')
+const sevdesk = require('./sevdesk.cjs')
+const { calculateInvoiceTotals: calculateSevdeskInvoiceTotals } = require('./auto-invoice.cjs')
+
+// Kurze Pause zwischen zwei sevDesk-Aufrufen (Ratenlimit ist nicht dokumentiert, 429 wird zusätzlich abgefangen).
+const SEVDESK_PAUSE_MS = 400
+const sevdeskSettingsRef = db.collection('sevdeskSettings').doc('config')
+const sevdeskRecordRef = (kind, id) => db.collection('sevdeskVouchers')
+  .doc(crypto.createHash('sha256').update(`${kind}:${String(id)}`).digest('hex'))
+
+const summarizeSevdesk = (record, source) => ({
+  synced: record?.status === 'synced',
+  status: String(record?.status || ''),
+  voucherId: String(record?.voucherId || ''),
+  voucherNumber: String(record?.voucherNumber || ''),
+  hasFile: Boolean(record?.fileName),
+  syncedAt: record?.syncedAt || null,
+  error: record?.status === 'error' ? String(record?.error || '') : '',
+  // In ZYRO nach der Übertragung storniert → in sevDesk muss der Beleg von Hand storniert werden.
+  needsAttention: Boolean(record?.status === 'synced' && source?.status === 'Storniert'),
+})
+
+// Kontenführung von sevDesk + Kontenrahmen einmal pro Lauf laden.
+const loadSevdeskContext = async (apiToken) => {
+  const settings = (await sevdeskSettingsRef.get()).data() || {}
+  const guides = await sevdesk.callSevdeskApi(apiToken, '/ReceiptGuidance/forAllAccounts')
+  const chart = ['SKR03', 'SKR04'].includes(settings.chart) ? settings.chart : sevdesk.detectChart(guides)
+  return { apiToken, guides, chart, accounts: sevdesk.mergeAccounts(chart, settings.accounts || {}), settings }
+}
+
+const loadSevdeskSources = async () => {
+  const [{ value: salesDocuments }, { value: products }, { value: financeEntries }] = await Promise.all([
+    readCloudAppData('zyro-sales-documents'),
+    readCloudAppData('zyro-products'),
+    readCloudAppData('zyro-finance-entries'),
+  ])
+  return {
+    invoices: (Array.isArray(salesDocuments) ? salesDocuments : []).filter((document) => document.kind === 'rechnung'),
+    products: Array.isArray(products) ? products : [],
+    entries: Array.isArray(financeEntries) ? financeEntries : [],
+  }
+}
+
+// Gemeinsamer Ablauf: Sperre setzen → Beleg hochladen → Dublette prüfen → Beleg anlegen → Status speichern.
+const pushToSevdesk = async ({ context, kind, source, actorName, prepare }) => {
+  const recordRef = sevdeskRecordRef(kind, source.id)
+  const existing = (await recordRef.get()).data()
+  if (existing?.status === 'synced' && existing.voucherId) return { ...summarizeSevdesk(existing, source), alreadySynced: true }
+
+  const now = Date.now()
+  let current = await db.runTransaction(async (transaction) => {
+    const record = (await transaction.get(recordRef)).data()
+    if (record?.status === 'processing' && Number(record.leaseUntil || 0) > now) {
+      throw new Error('Die sevDesk-Übertragung läuft bereits. Bitte kurz warten.')
+    }
+    const next = {
+      ...(record || {}),
+      kind,
+      sourceId: String(source.id),
+      actorName: String(actorName || 'Automatik').slice(0, 100),
+      status: 'processing',
+      leaseUntil: now + 110000,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      ...(record ? {} : { createdAt: admin.firestore.FieldValue.serverTimestamp() }),
+    }
+    transaction.set(recordRef, next)
+    return next
+  })
+  const save = async (changes) => {
+    current = { ...current, ...changes }
+    await recordRef.update({ ...changes, updatedAt: admin.firestore.FieldValue.serverTimestamp() })
+  }
+
+  try {
+    const { number, creditDebit, file, build } = await prepare()
+    const found = await sevdesk.findSevdeskVoucherByNumber(context.apiToken, number, creditDebit)
+    await sevdesk.sleep(SEVDESK_PAUSE_MS)
+    let voucherId = found?.id ? String(found.id) : ''
+    let fileName = ''
+    if (!voucherId) {
+      // sevDesk verlangt: zuerst Datei hochladen, dann Beleg mit dem zurückgegebenen Dateinamen anlegen.
+      let tempName = null
+      if (file) {
+        tempName = await sevdesk.uploadSevdeskTempFile(context.apiToken, file.data, file.name, file.contentType)
+        fileName = file.name
+        await sevdesk.sleep(SEVDESK_PAUSE_MS)
+      }
+      const created = await sevdesk.callSevdeskApi(context.apiToken, '/Voucher/Factory/saveVoucher', { method: 'POST', body: build(tempName) })
+      voucherId = String(created?.objects?.voucher?.id || created?.voucher?.id || '')
+      if (!voucherId) throw new Error('sevDesk hat keine Beleg-ID zurückgegeben.')
+    }
+    await save({
+      status: 'synced',
+      voucherId,
+      voucherNumber: number,
+      fileName,
+      existedBefore: Boolean(found),
+      syncedAt: new Date().toISOString(),
+      leaseUntil: 0,
+      error: admin.firestore.FieldValue.delete(),
+    })
+    return summarizeSevdesk({ ...current, error: '' }, source)
+  } catch (error) {
+    await recordRef.update({
+      status: 'error',
+      error: String(error.message || 'Unbekannter Fehler').slice(0, 400),
+      leaseUntil: 0,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }).catch(() => {})
+    throw error
+  }
+}
+
+const pushInvoiceToSevdesk = (context, invoice, products, actorName) => pushToSevdesk({
+  context,
+  kind: 'invoice',
+  source: invoice,
+  actorName,
+  prepare: async () => {
+    const reason = sevdesk.getInvoiceIneligibleReason(invoice)
+    if (reason) throw new Error(reason)
+    const totals = calculateSevdeskInvoiceTotals(invoice, products)
+    // Vorab prüfen (Konten/Steuersatz), bevor die PDF hochgeladen wird.
+    sevdesk.buildInvoiceVoucher({ invoice, totals, guides: context.guides, accounts: context.accounts })
+    const { pdf } = await loadInvoicePdfForPaywise(invoice, products)
+    return {
+      number: String(invoice.number).trim(),
+      creditDebit: 'D',
+      file: { data: pdf, name: `${sevdesk.safeFileName(invoice.number, 'Rechnung')}.pdf`, contentType: 'application/pdf' },
+      build: (filename) => sevdesk.buildInvoiceVoucher({ invoice, totals, guides: context.guides, accounts: context.accounts, filename }),
+    }
+  },
+})
+
+const pushEntryToSevdesk = (context, entry, actorName) => pushToSevdesk({
+  context,
+  kind: 'entry',
+  source: entry,
+  actorName,
+  prepare: async () => {
+    const reason = sevdesk.getEntryIneligibleReason(entry)
+    if (reason) throw new Error(reason)
+    sevdesk.buildEntryVoucher({ entry, guides: context.guides, accounts: context.accounts })
+    // sevDesk nimmt einen Beleg pro Buchung – der erste hochgeladene Beleg wird angehängt.
+    const attachment = (Array.isArray(entry.receiptAttachments) ? entry.receiptAttachments : [])[0]
+    let file = null
+    if (attachment?.id) {
+      const { receipt, data } = await loadFinanceReceipt(String(entry.id), String(attachment.id))
+      file = { data, name: sevdesk.safeFileName(receipt.fileName || attachment.fileName), contentType: receipt.contentType || attachment.contentType }
+    }
+    return {
+      number: sevdesk.entryVoucherNumber(entry),
+      creditDebit: entry.type === 'income' ? 'D' : 'C',
+      file,
+      build: (filename) => sevdesk.buildEntryVoucher({ entry, guides: context.guides, accounts: context.accounts, filename }),
+    }
+  },
+})
+
+// Offene Posten ermitteln (noch nicht übertragen, übertragbar). since = nur ab diesem Datum (JJJJ-MM-TT).
+const collectSevdeskPending = async ({ invoices, entries }, { since = '', skipRecentErrors = false } = {}) => {
+  const candidates = [
+    ...invoices.filter((invoice) => !sevdesk.getInvoiceIneligibleReason(invoice) && (!since || invoice.documentDate >= since))
+      .map((source) => ({ kind: 'invoice', source })),
+    ...entries.filter((entry) => !sevdesk.getEntryIneligibleReason(entry) && (!since || entry.date >= since))
+      .map((source) => ({ kind: 'entry', source })),
+  ]
+  const records = candidates.length
+    ? await db.getAll(...candidates.map(({ kind, source }) => sevdeskRecordRef(kind, source.id)))
+    : []
+  return candidates.map((candidate, index) => ({ ...candidate, record: records[index]?.data() || null }))
+    .filter(({ record }) => {
+      if (record?.status === 'synced') return false
+      // Fehlgeschlagene Belege automatisch höchstens alle 6 Stunden erneut versuchen.
+      if (skipRecentErrors && record?.status === 'error'
+        && Number(record?.updatedAt?.toMillis?.() || 0) > Date.now() - 6 * 60 * 60 * 1000) return false
+      return true
+    })
+    .map(({ record, ...candidate }) => ({ ...candidate, error: record?.status === 'error' ? String(record.error || '') : '' }))
+}
+
+const runSevdeskBatch = async (context, pending, products, actorName, { limit = 20, deadline = Date.now() + 90000 } = {}) => {
+  const results = { synced: 0, failed: [] }
+  for (const item of pending.slice(0, limit)) {
+    if (Date.now() > deadline) break
+    try {
+      if (item.kind === 'invoice') await pushInvoiceToSevdesk(context, item.source, products, actorName)
+      else await pushEntryToSevdesk(context, item.source, actorName)
+      results.synced += 1
+    } catch (error) {
+      results.failed.push({
+        kind: item.kind,
+        id: String(item.source.id),
+        label: item.kind === 'invoice' ? `Rechnung ${item.source.number}` : `${item.source.type === 'income' ? 'Einnahme' : 'Ausgabe'} ${item.source.date} · ${item.source.description}`,
+        error: error.message,
+      })
+      if (error.sevdeskStatus === 401) break
+    }
+    await sevdesk.sleep(SEVDESK_PAUSE_MS)
+  }
+  return results
+}
+
+exports.sevdeskSync = onRequest({
+  region,
+  invoker: 'public',
+  cors: false,
+  maxInstances: 3,
+  timeoutSeconds: 120,
+  memory: '512MiB',
+  secrets: [sevdeskApiToken, orderAdminToken],
+}, async (request, response) => {
+  setCors(request, response)
+  if (request.method === 'OPTIONS') return response.status(204).send('')
+  if (request.method !== 'POST') return sendMethodError(response)
+  const origin = String(request.get('origin') || '')
+  if (origin && !allowedOrigins.has(origin)) return response.status(403).json({ error: 'sevDesk-Zugriff nicht zulässig.' })
+  try {
+    const actor = verifyAdminToken(request)
+      ? { id: 'desktop:admin', name: 'Desktop-Admin', role: 'admin' }
+      : await getWebAppActor(request)
+    if (actor.role !== 'admin' && !(Array.isArray(actor.permissions) && actor.permissions.includes('finanzen'))) {
+      return response.status(403).json({ error: 'Du hast keine Finanzen-Berechtigung.' })
+    }
+    const apiToken = sevdeskApiToken.value().trim()
+    if (!apiToken) return response.status(503).json({ error: 'sevDesk-API-Token ist nicht serverseitig eingerichtet.' })
+    const action = String(request.body?.action || '')
+
+    if (action === 'invoice-get') {
+      const invoiceId = String(request.body?.invoiceId || '').slice(0, 200)
+      const { invoices } = await loadSevdeskSources()
+      return response.json(summarizeSevdesk((await sevdeskRecordRef('invoice', invoiceId).get()).data(),
+        invoices.find((entry) => String(entry.id) === invoiceId)))
+    }
+
+    const sources = await loadSevdeskSources()
+    if (action === 'overview') {
+      const pending = await collectSevdeskPending(sources)
+      const settings = (await sevdeskSettingsRef.get()).data() || {}
+      return response.json({
+        autoSyncFrom: settings.autoSyncFrom || '',
+        pendingInvoices: pending.filter((item) => item.kind === 'invoice').length,
+        pendingIncome: pending.filter((item) => item.kind === 'entry' && item.source.type === 'income').length,
+        pendingExpenses: pending.filter((item) => item.kind === 'entry' && item.source.type === 'expense').length,
+        errors: pending.filter((item) => item.error).slice(0, 30).map((item) => ({
+          label: item.kind === 'invoice' ? `Rechnung ${item.source.number}` : `${item.source.type === 'income' ? 'Einnahme' : 'Ausgabe'} ${item.source.date} · ${item.source.description}`,
+          error: item.error,
+        })),
+      })
+    }
+
+    const context = await loadSevdeskContext(apiToken)
+    if (action === 'status') {
+      return response.json({ configured: true, chart: context.chart })
+    }
+    if (action === 'invoice-push') {
+      const invoiceId = String(request.body?.invoiceId || '').slice(0, 200)
+      const invoice = sources.invoices.find((entry) => String(entry.id) === invoiceId)
+      if (!invoice) return response.status(404).json({ error: 'Rechnung wurde nicht gefunden.' })
+      return response.json(await pushInvoiceToSevdesk(context, invoice, sources.products, actor.name))
+    }
+    if (action === 'sync-all') {
+      // Ein Aufruf schafft ~20 Belege; die App ruft so lange erneut auf, bis nichts mehr offen ist.
+      const pending = await collectSevdeskPending(sources)
+      const result = await runSevdeskBatch(context, pending, sources.products, actor.name, { limit: 20 })
+      const remaining = Math.max(0, pending.length - result.synced - result.failed.length)
+      return response.json({ ...result, remaining })
+    }
+    return response.status(400).json({ error: 'sevDesk-Aktion ungültig.' })
+  } catch (error) {
+    const status = error.message.includes('Anmeldung') || error.message.includes('Benutzerkonto') ? 401 : 400
+    console.error('sevDesk-Übertragung fehlgeschlagen:', error.message)
+    return response.status(status).json({ error: error.message || 'sevDesk-Übertragung fehlgeschlagen.' })
+  }
+})
+
+// Automatik: stündlich neue Rechnungen, Einnahmen und Ausgaben nachschieben (max. 30 pro Lauf).
+// Nur Belege ab dem Datum des ersten Laufs – ältere Belege per „Alles übertragen“ in der App schicken.
+exports.sevdeskAutoSync = onSchedule({
+  region,
+  schedule: 'every 60 minutes',
+  timeZone: 'Europe/Berlin',
+  maxInstances: 1,
+  timeoutSeconds: 540,
+  memory: '512MiB',
+  secrets: [sevdeskApiToken],
+}, async () => {
+  const apiToken = sevdeskApiToken.value().trim()
+  if (!apiToken) return
+  let autoSyncFrom = (await sevdeskSettingsRef.get()).data()?.autoSyncFrom
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(autoSyncFrom || ''))) {
+    autoSyncFrom = berlinDate()
+    await sevdeskSettingsRef.set({ autoSyncFrom, createdAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true })
+  }
+  const sources = await loadSevdeskSources()
+  const pending = await collectSevdeskPending(sources, { since: autoSyncFrom, skipRecentErrors: true })
+  if (!pending.length) return
+  const context = await loadSevdeskContext(apiToken)
+  const result = await runSevdeskBatch(context, pending, sources.products, 'Automatik', { limit: 30, deadline: Date.now() + 480000 })
+  result.failed.forEach((item) => console.error(`sevDesk-Automatik: ${item.label}: ${item.error}`))
 })

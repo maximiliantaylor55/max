@@ -134,6 +134,23 @@ firebase deploy --only functions:paywiseInkasso,hosting --project zyro-78855
 
 Sandbox- und Produktionsschlüssel sind getrennt; die App wählt anhand des `pw_sbx_`-Präfixes automatisch den Sandbox-Endpunkt. Zuerst mit einem Paywise-Sandboxschlüssel testen.
 
+### sevDesk (Rechnungen, Einnahmen und Ausgaben → Buchhaltung)
+
+Ausgestellte Rechnungen (Ausgestellt, Versendet, Überfällig, Bezahlt) sowie alle Einnahmen und Ausgaben aus **Finanzen** werden als Beleg in sevDesk angelegt – mit angehängter Rechnungs-PDF bzw. dem ersten hochgeladenen Beleg. Rechnungen erhalten ihre ZYRO-Rechnungsnummer als Belegnummer; es entsteht keine zweite Rechnung in sevDesk. Einnahmen, die aus einer Rechnung übernommen wurden, werden übersprungen (sonst doppelte Erlöse). Vor dem Anlegen wird geprüft, ob es die Belegnummer in sevDesk schon gibt.
+
+- **Konten:** Kontenrahmen SKR03/SKR04 wird automatisch erkannt. Rechnungen → Erlöse 19 %/7 % (8400/8300 bzw. 4400/4300), Pfand als 0-%-Position (8200 bzw. 4200). Ausgaben je Kategorie auf das passende Aufwandskonto; eine in der Buchung eingetragene Kontonummer hat Vorrang. Abweichungen in Firestore unter `sevdeskSettings/config` (`chart`, `accounts`).
+- **Manuell:** Unter **Verkauf** an jeder Rechnung „An sevDesk übertragen“; unter **Finanzen → sevDesk** „Alles übertragen“ (auch ältere Belege).
+- **Automatisch:** `sevdeskAutoSync` läuft stündlich (max. 30 Belege pro Lauf) für Belege ab dem Datum des ersten Laufs.
+- Rechnungen mit 0 % USt. und Stornos werden nicht automatisch übertragen.
+
+Voraussetzung: sevDesk mit „sevdesk-Update 2.0“. API-Token in sevDesk unter Einstellungen → Benutzer kopieren und als Secret setzen:
+
+```powershell
+firebase functions:secrets:set SEVDESK_API_TOKEN --project zyro-78855
+npm run build:web
+firebase deploy --only functions:sevdeskSync,functions:sevdeskAutoSync,hosting --project zyro-78855
+```
+
 ### Finanzbereich, BWA und UStVA-Vorschau
 
 Admins finden unter **Finanzen** die Erfassung von Einnahmen und Ausgaben sowie eine Monatsauswertung auf Ist-Basis. Ausgestellte Rechnungen werden zusätzlich nach Rechnungsdatum separat in der Monatsauswertung angezeigt; sie fließen erst nach bestätigtem Zahlungseingang und Übernahme als Buchung in die zahlungsbasierten BWA- und UStVA-Summen ein. Admins können Mitarbeitern das Modul **Finanzen** unter **Admin → Mitglieder** ausdrücklich freigeben; diese Berechtigung erlaubt Anzeigen, Erfassen und Bearbeiten, während das Löschen Admins vorbehalten bleibt. Zu jeder Buchung können bis zu fünf Belege als PDF, JPG oder PNG (jeweils maximal 10 MB) in den privaten Cloud-Speicher in der EU geladen und wieder heruntergeladen werden. Die Dateien sind nicht öffentlich und nur mit Finanzen-Berechtigung abrufbar; sie sind nicht Ende-zu-Ende-verschlüsselt. Beim Löschen einer Buchung durch einen Admin werden die zugehörigen Cloud-Dateien ebenfalls gelöscht. Für die Umsatzsteuerberechnung muss bei Einnahmen das tatsächliche Zahlungsdatum eingetragen werden; bezahlte Rechnungen müssen als Einnahme erfasst werden. Vorsteuer wird in der Vorschau nur für Ausgaben mit vorhandenem Beleg und Belegdatum im ausgewählten Monat berücksichtigt. Die Auswertung lässt sich als CSV exportieren oder drucken bzw. als PDF speichern.
@@ -142,13 +159,12 @@ Admins finden unter **Finanzen** die Erfassung von Einnahmen und Ausgaben sowie 
 
 Unter **Einkauf** können berechtigte Nutzer Lieferanten verwalten, Einkaufsaufträge mit Produkten, Mengen, Nettopreisen und erwarteten Terminen anlegen sowie Eingangsrechnungsdaten erfassen. Der Wareneingang wird über die geprüfte Cloud-Buchung gebucht: Teilmengen erhöhen den Fertigproduktbestand, legen bei eingetragener Charge bzw. Mindesthaltbarkeit passende Bestandslose an und erzeugen nachvollziehbare Lagerbewegungen. Doppelte Buchungen werden verhindert; ein Auftrag wird erst nach vollständiger Lieferung abgeschlossen. Eine Eingangsrechnung kann einmalig in **Finanzen** übernommen werden und benötigt dort einen hochgeladenen Beleg. Wareneingänge für Rohstoffe sind noch nicht enthalten, da das vorhandene Rohstoffinventar keine belastbaren Mengeneinheiten führt.
 
-Die Anzeige ist eine vereinfachte Vorbereitung und weder eine amtliche Umsatzsteuervoranmeldung noch eine zertifizierte BWA. Beträge und Belege müssen geprüft werden; die UStVA wird derzeit manuell in **Mein ELSTER** eingereicht. Es gibt keine direkte ELSTER-Übermittlung.
+Die Anzeige ist eine vereinfachte Vorbereitung und weder eine amtliche Umsatzsteuervoranmeldung noch eine zertifizierte BWA. Beträge und Belege müssen geprüft werden; die UStVA wird über sevDesk bzw. das Steuerbüro eingereicht.
 
 Finanzbuchungen können zusätzlich ein Sachkonto aus dem SKR03 erhalten. Die DATEV-Vorbereitung erzeugt für bezahlte Buchungen des ausgewählten Monats eine CSV-Übergabe mit Beleg-/Zahlungsdatum, Sachkonto, Bank-Gegenkonto, Betrag und Steuersatz. Das ist kein ungeprüft importierbarer DATEV-Buchungsstapel: Konten, Steuerschlüssel und Importzuordnung müssen mit dem Steuerbüro abgestimmt werden. Für Warenverkäufe mit 19 % bzw. 7 % werden 8400 bzw. 8300 als Vorschlag angezeigt; andere Konten sind manuell zuzuordnen. Bestehende Buchungen ohne Sachkonto bleiben erhalten, müssen aber vor dem DATEV-Export kontiert werden.
 
 Wird eine Rechnung auf **Bezahlt** gesetzt, wird das Zahlungsdatum gespeichert. Berechtigte Nutzer können die bezahlte Rechnung anschließend einmalig in die Finanzbuchhaltung übernehmen; Betrag, Kunde, Belegnummer und Umsatzsteuer werden vorgeschlagen und müssen vor dem Speichern geprüft werden. Der tatsächliche Zahlungseingang muss bestätigt sein.
 
-Unter **Finanzen → ELSTER / ERiC vorbereiten** können Admins Firmen- und Steuerangaben sowie den Stand der Herstellerregistrierung und die Hersteller-ID hinterlegen. Die Angaben einschließlich Steuernummer werden mit der Cloud synchronisiert; nur Admin-Konten können sie über die App abrufen oder ändern. Die Cloud-Daten sind nicht Ende-zu-Ende-verschlüsselt. Passwörter, Zertifikatsdateien und private Schlüssel gehören nicht in diese Maske. Für die manuelle Übertragung in Mein ELSTER gibt es eine druckbare UStVA-Vorschau im eingestellten Monats- oder Quartalszeitraum. Sie ist kein amtlicher ELSTER-Datensatz und übermittelt nichts. ERiC-Zulassung und die Bestätigung, ob ELSTER Secure für ERiC unterstützt wird, stehen noch aus. Vorhandene lokale Vorbereitungsangaben werden beim ersten Öffnen des Finanzbereichs mit Version 1.0.72 in die gemeinsame Datenablage übernommen.
 
 ### Zahlungsanträge und SEPA-Export
 

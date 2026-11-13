@@ -1,7 +1,7 @@
 {
   "name": "zyro-programm",
   "private": true,
-  "version": "1.3.0",
+  "version": "1.3.9",
   "description": "Lokale Desktop-Anwendung für Getränkeproduktion und Verkaufsbelege",
   "author": "Liberty Street Food GmbH",
   "type": "module",
@@ -14,8 +14,8 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "desktop": "npm run build && electron .",
-    "desktop:pack": "npm run build && electron-builder --win",
-    "desktop:pack:mac": "npm run build && electron-builder --mac --x64 --arm64 --universal"
+    "desktop:pack": "npm run build && electron-builder --win -c.electronDist=node_modules/electron/dist",
+    "desktop:pack:mac": "npm run build && electron-builder --mac --x64 --arm64"
   },
   "dependencies": {
     "@google/genai": "^2.30.0",
@@ -56,7 +56,8 @@
       }
     ],
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
     "files": [
       "dist/**/*",
@@ -79,12 +80,12 @@
       "functions/sip-softphone-validation.cjs",
       "package.json"
     ],
-    "electronDist": "node_modules/electron/dist",
     "electronLanguages": [
       "de",
       "en-US"
     ],
     "win": {
+      "icon": "build/icon.png",
       "target": [
         "nsis",
         "portable"
@@ -98,7 +99,11 @@
       "createStartMenuShortcut": true
     },
     "mac": {
-      "minimumSystemVersion": "14.0.0",
+      "icon": "build/icon.png",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "minimumSystemVersion": "13.0.0",
       "category": "public.app-category.business",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Zyro benötigt das Mikrofon für interne und externe Telefonate.",

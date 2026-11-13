@@ -65,6 +65,8 @@ const buildDesktopCatalog = (desktopProducts) => {
   const catalog = []
   for (const product of Array.isArray(desktopProducts) ? desktopProducts : []) {
     if (!product || !(product.shopActive === true || product.shopActive === 'true') || product.status === 'Inaktiv') continue
+    // Versandartikel sind nur für Belege da, nie im Shop.
+    if (String(product.category || '').trim().toLowerCase() === 'versand') continue
     const id = slugify(product.sku || product.name)
     const unitNet = toNumber(product.unitPrice)
     const perCase = 24
@@ -106,6 +108,8 @@ const buildDesktopCatalog = (desktopProducts) => {
       preorderEnabled,
       expectedDeliveryDate,
       tiers: cleanTiers(product.shopTiers),
+      // z. B. Mix-Trays: nur in ganzen 24er-Trays bestellbar.
+      trayOnly: product.shopTrayOnly === true || product.shopTrayOnly === 'true',
       depositCents: Math.max(0, Math.round(Number(product.depositPerUnit || 0) * 100)),
       category: String(product.category || '').slice(0, 40),
       image: images[0] || '',

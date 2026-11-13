@@ -12,7 +12,6 @@ import {
 import {
   calculateFinanceReport,
   calculateIssuedInvoiceOverview,
-  calculateVatSubmissionPreview,
 } from './finance-accounting.js'
 import {
   buildDatevPreparationCsv,
@@ -22,6 +21,30 @@ import {
   reconcilePaidSalesInvoices,
 } from './erp-accounting.js'
 import { calculateProductionCost } from './production-calculation.js'
+import { catalogAdditiveClasses, catalogSource, referencePriceDate } from './raw-material-catalog.js'
+import {
+  applyFillUp,
+  calculateRecipe,
+  dilutionFactor,
+  joinBatchSize,
+  recipeKinds,
+  splitBatchSize,
+  catalogEntryToRawMaterial,
+  fillReferencePrices,
+  missingCatalogEntries,
+  matchedAlias,
+  rawMaterialLabel,
+  searchCatalog,
+  createRecipeItem,
+  initialRawMaterialForm,
+  parseAmount,
+  parseIngredientText,
+  rawMaterialCategories,
+  rawMaterialUnits,
+  recipeItemsToText,
+  searchRawMaterials,
+  validateRawMaterial,
+} from './recipe-system.js'
 import {
   getScheduleToday,
   getScheduleAssignees,
@@ -41,6 +64,7 @@ import SipSoftphone from './SipSoftphone.jsx'
 import CustomerLetters from './CustomerLetters.jsx'
 import PaywiseInkasso from './PaywiseInkasso.jsx'
 import PaywiseMahnservice from './PaywiseMahnservice.jsx'
+import { SevdeskInvoiceSync, SevdeskPanel } from './SevdeskSync.jsx'
 import Newsletter from './Newsletter.jsx'
 import BehoerdenMappe from './BehoerdenMappe.jsx'
 
@@ -53,6 +77,7 @@ const companyDetails = {
   iban: 'DE42460500010030988323',
 }
 const CustomerMap = lazy(() => import('./CustomerMap.jsx'))
+const ContractManufacturing = lazy(() => import('./ContractManufacturing.jsx'))
 const initialInvoiceCompanyDetails = {
   id: 'global',
   ...companyDetails,
@@ -216,6 +241,86 @@ const formatFileSize = (size) => size < 1024 * 1024
   ? `${Math.max(1, Math.round(size / 1024))} KB`
   : `${(size / (1024 * 1024)).toFixed(1)} MB`
 const employeePermissionTabs = [...baseTabs, 'finanzen']
+const shipmentCarriers = ['DPD', 'DHL', 'GLS', 'UPS', 'Hermes', 'Spedition']
+const directShippableStatuses = ['Offen', 'Bestätigt', 'In Produktion', 'Kommissionierung']
+const dpdProductOptions = [['CL', 'DPD Classic (Geschäftskunde)'], ['B2C', 'DPD Home (Privatkunde)'], ['PL', 'DPD ParcelLetter']]
+
+function DpdLabelFields({ value, onChange }) {
+  return (
+    <>
+      <fieldset className="dpd-label-mode">
+        <legend>Versandlabel</legend>
+        <label>
+          <input type="radio" checked={value.labelMode === 'dpd'} onChange={() => onChange({ labelMode: 'dpd' })} />
+          Automatisch über DPD erzeugen
+        </label>
+        <label>
+          <input type="radio" checked={value.labelMode !== 'dpd'} onChange={() => onChange({ labelMode: 'existing' })} />
+          Vorhandenes Label – Sendungsnummer eintragen
+        </label>
+      </fieldset>
+      {value.labelMode === 'dpd' && (
+        <>
+          <label>
+            Paketgewicht (kg)
+            <input type="number" min="0.01" max="31.5" step="0.01" required value={value.weightKg} onChange={(event) => onChange({ weightKg: event.target.value })} />
+          </label>
+          <label>
+            DPD-Produkt
+            <select value={value.dpdProduct || 'CL'} onChange={(event) => onChange({ dpdProduct: event.target.value })}>
+              {dpdProductOptions.map(([code, label]) => <option key={code} value={code}>{label}</option>)}
+            </select>
+          </label>
+        </>
+      )}
+    </>
+  )
+}
+
+const openLabelPdf = async (base64, fileName) => {
+  if (!base64) return
+  if (window.zyroPrinter?.openPdf) {
+    await window.zyroPrinter.openPdf(base64, fileName)
+    return
+  }
+  const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0))
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
+  const opened = window.open(url, '_blank', 'noopener')
+  if (!opened) {
+    const link = document.createElement('a')
+    link.href = url
+    link.download = fileName
+    link.click()
+  }
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+}
+
+const initialManualShipmentForm = {
+  recipient: '',
+  recipientEmail: '',
+  recipientAddress: '',
+  reference: '',
+  carrier: 'DPD',
+  carrierName: '',
+  trackingNumber: '',
+  trackingUrl: '',
+  note: '',
+  notifyCustomer: true,
+  labelMode: 'existing',
+  weightKg: '',
+  dpdProduct: 'CL',
+}
+const carrierTrackingUrl = (carrier, trackingNumber) => {
+  const number = encodeURIComponent(String(trackingNumber || ''))
+  if (!number) return ''
+  return {
+    DHL: `https://www.dhl.de/de/privatkunden/dhl-sendungsverfolgung.html?piececode=${number}`,
+    DPD: `https://tracking.dpd.de/status/de_DE/parcel/${number}`,
+    GLS: `https://gls-group.com/DE/de/paketverfolgung?match=${number}`,
+    UPS: `https://www.ups.com/track?loc=de_DE&tracknum=${number}`,
+    Hermes: `https://www.myhermes.de/empfangen/sendungsverfolgung/sendungsinformation#${number}`,
+  }[carrier] || ''
+}
 const canManageFinance = (user) => user?.role === 'admin'
   || (Array.isArray(user?.permissions) && user.permissions.includes('finanzen'))
 const createFinanceEntryForm = () => {
@@ -305,21 +410,6 @@ const buildPaymentSepaXml = (settings, requests, createdAt = new Date()) => {
   }).join('')
   return `<?xml version="1.0" encoding="UTF-8"?><Document xmlns="urn:iso:std:iso:20022:tech:xsd:pain.001.001.03"><CstmrCdtTrfInitn><GrpHdr><MsgId>${messageId}</MsgId><CreDtTm>${createdAt.toISOString()}</CreDtTm><NbOfTxs>${requests.length}</NbOfTxs><CtrlSum>${formatCents(totalCents)}</CtrlSum><InitgPty><Nm>${escapePaymentXml(settings.accountName)}</Nm></InitgPty></GrpHdr>${paymentInfos}</CstmrCdtTrfInitn></Document>`
 }
-const initialElsterSetup = {
-  businessName: '',
-  taxNumber: '',
-  taxOffice: '',
-  federalState: '',
-  filingPeriod: 'monthly',
-  developerStatus: 'not-started',
-  manufacturerId: '',
-  ericVersion: '',
-}
-const elsterSetupFromEntries = (entries) => ({
-  ...initialElsterSetup,
-  ...(Array.isArray(entries) ? entries.find((entry) => entry?.id === 'setup') : null),
-})
-const elsterSetupEntry = (setup) => ({ id: 'setup', ...setup })
 const requestedManagementMode = new URLSearchParams(window.location.search).get('mode')
 const scheduleStandalone = window.location.pathname.replace(/\/+$/, '') === '/schichtplan'
 const scannerStandalone = requestedManagementMode === 'scanner'
@@ -346,7 +436,7 @@ const permissionLabels = {
   maschinenbau: 'Maschinenbau',
 }
 
-const initialRecipeForm = { name: '', type: 'Energy', batchSize: '', description: '', ingredients: '', labReports: [] }
+const initialRecipeForm = { name: '', type: 'Energy', kind: 'Fertiges Getränk', dilution: '', batchSize: '', description: '', ingredients: '', labReports: [] }
 const createLabTestForm = () => ({
   sampleCode: 'A',
   recipeId: '',
@@ -372,7 +462,7 @@ const labSweetnessLabels = {
   'not-tested': 'Noch nicht getestet',
 }
 const labRatingLabels = (rating) => `${rating}/10`
-const initialProductForm = { name: '', sku: '', ean13: '', category: 'Energy', volume: '500ml', productionQuantity: '', productionUnit: 'Dosen', availableBottles: '', unitPrice: '', status: 'Aktiv', labReports: [], labelAttachment: null, depositPerUnit: '', minStock: '', lotNumber: '', bestBefore: '', bottlesPerCase: '24', weightKg: '', shopImage: '', shopImages: [], shopActive: false, shopPreorderEnabled: false, shopExpectedDeliveryDate: '', shopCratePrice: '', shopDescription: '', shopIngredients: '', shopNutrition: '', shopNutritionValues: {}, tier1Qty: '', tier1Pct: '', tier2Qty: '', tier2Pct: '' }
+const initialProductForm = { name: '', sku: '', ean13: '', category: 'Energy', volume: '500ml', productionQuantity: '', productionUnit: 'Dosen', availableBottles: '', unitPrice: '', status: 'Aktiv', labReports: [], labelAttachment: null, depositPerUnit: '', minStock: '', lotNumber: '', bestBefore: '', bottlesPerCase: '24', weightKg: '', shopImage: '', shopImages: [], shopActive: false, shopTrayOnly: false, shopPreorderEnabled: false, shopExpectedDeliveryDate: '', shopCratePrice: '', shopShippingUnit: '', shopShippingTray: '', shopDescription: '', shopIngredients: '', shopNutrition: '', shopNutritionValues: {}, tier1Qty: '', tier1Pct: '', tier2Qty: '', tier2Pct: '' }
 const shopCatalogProductId = (product) => String(product.sku || product.name || '')
   .toLowerCase()
   .replace(/[^a-z0-9]+/g, '-')
@@ -403,9 +493,12 @@ const productExtras = (form) => ({
   shopImages: (Array.isArray(form.shopImages) && form.shopImages.length ? form.shopImages : (form.shopImage ? [form.shopImage] : [])).slice(0, 5),
   shopImage: (Array.isArray(form.shopImages) && form.shopImages.length ? form.shopImages[0] : form.shopImage) || '',
   shopActive: Boolean(form.shopActive),
+  shopTrayOnly: Boolean(form.shopTrayOnly),
   shopPreorderEnabled: Boolean(form.shopPreorderEnabled),
   shopExpectedDeliveryDate: String(form.shopExpectedDeliveryDate || ''),
   shopCratePrice: Math.max(0, Number(String(form.shopCratePrice).replace(',', '.')) || 0),
+  shopShippingUnit: String(form.shopShippingUnit ?? '').trim() === '' ? '' : Math.max(0, Number(String(form.shopShippingUnit).replace(',', '.')) || 0),
+  shopShippingTray: String(form.shopShippingTray ?? '').trim() === '' ? '' : Math.max(0, Number(String(form.shopShippingTray).replace(',', '.')) || 0),
   shopDescription: String(form.shopDescription || '').trim().slice(0, 1500),
   shopIngredients: String(form.shopIngredients || '').trim().slice(0, 600),
   shopNutritionValues: Object.fromEntries(nutritionFields.map(({ name }) => [name, String(form.shopNutritionValues?.[name] ?? '').trim()])),
@@ -427,9 +520,12 @@ const productExtrasToForm = (product) => ({
   shopImage: (Array.isArray(product.shopImages) && product.shopImages.length ? product.shopImages[0] : product.shopImage) || '',
   shopImages: (Array.isArray(product.shopImages) && product.shopImages.length ? product.shopImages : (product.shopImage ? [product.shopImage] : [])).slice(0, 5),
   shopActive: Boolean(product.shopActive),
+  shopTrayOnly: product.shopTrayOnly === true || product.shopTrayOnly === 'true',
   shopPreorderEnabled: Boolean(product.shopPreorderEnabled),
   shopExpectedDeliveryDate: product.shopExpectedDeliveryDate || '',
   shopCratePrice: product.shopCratePrice ? String(product.shopCratePrice) : '',
+  shopShippingUnit: product.shopShippingUnit === '' || product.shopShippingUnit === undefined || product.shopShippingUnit === null ? '' : String(product.shopShippingUnit).replace('.', ','),
+  shopShippingTray: product.shopShippingTray === '' || product.shopShippingTray === undefined || product.shopShippingTray === null ? '' : String(product.shopShippingTray).replace('.', ','),
   shopDescription: product.shopDescription || '',
   shopIngredients: product.shopIngredients || '',
   shopNutrition: product.shopNutrition || '',
@@ -745,6 +841,18 @@ function App() {
   const [customerDeleteConfirmation, setCustomerDeleteConfirmation] = useState(null)
   const [customerDeleteEmailInput, setCustomerDeleteEmailInput] = useState('')
   const [recipes, setRecipes] = useState(() => readStorage('zyro-recipes', seedRecipes))
+  const [rawMaterials, setRawMaterials] = useState(() => readStorage('zyro-raw-materials', []))
+  const [rawMaterialForm, setRawMaterialForm] = useState(initialRawMaterialForm)
+  const [editingRawMaterialId, setEditingRawMaterialId] = useState(null)
+  const [rawMaterialMessage, setRawMaterialMessage] = useState('')
+  const [rawMaterialFilter, setRawMaterialFilter] = useState('')
+  const [recipeItems, setRecipeItems] = useState([])
+  const [recipeMaterialSearch, setRecipeMaterialSearch] = useState('')
+  const [recipeView, setRecipeView] = useState('rezepturen')
+  const [recipeFormMessage, setRecipeFormMessage] = useState('')
+  const [catalogQuery, setCatalogQuery] = useState('')
+  const [catalogClass, setCatalogClass] = useState('')
+  const [recipePrintWithCosts, setRecipePrintWithCosts] = useState(true)
   const [labTests, setLabTests] = useState(() => readStorage('zyro-lab-tests', []))
   const [labTestForm, setLabTestForm] = useState(createLabTestForm)
   const [labTestMessage, setLabTestMessage] = useState('')
@@ -796,6 +904,7 @@ function App() {
   const [paymentMessage, setPaymentMessage] = useState('')
   const [paymentSaving, setPaymentSaving] = useState(false)
   const [productionCalculations, setProductionCalculations] = useState(() => readStorage('zyro-cost-calculations', []))
+  const [contractJobs, setContractJobs] = useState(() => readStorage('zyro-contract-jobs', []))
   const [productionCalculationForm, setProductionCalculationForm] = useState(createProductionCalculationForm)
   const [editingProductionCalculationId, setEditingProductionCalculationId] = useState('')
   const [productionCalculationMessage, setProductionCalculationMessage] = useState('')
@@ -806,10 +915,6 @@ function App() {
   const [financeEntrySaving, setFinanceEntrySaving] = useState(false)
   const [editingFinanceEntryId, setEditingFinanceEntryId] = useState('')
   const [financeMessage, setFinanceMessage] = useState('')
-  const [elsterSetup, setElsterSetup] = useState(initialElsterSetup)
-  const [elsterSetupMessage, setElsterSetupMessage] = useState('')
-  const [elsterSetupSaving, setElsterSetupSaving] = useState(false)
-  const [showElsterPreview, setShowElsterPreview] = useState(false)
   const [stockMovements, setStockMovements] = useState(() => readStorage('zyro-stock-movements', []))
   const [adjustForm, setAdjustForm] = useState({ productId: '', type: 'Bruch', quantity: '', note: '' })
   const [adjustMessage, setAdjustMessage] = useState('')
@@ -968,6 +1073,10 @@ function App() {
   const [mdeScannedQuantities, setMdeScannedQuantities] = useState({})
   const [mdeProductScan, setMdeProductScan] = useState('')
   const [mdeShipmentDrafts, setMdeShipmentDrafts] = useState({})
+  const [manualShipmentOpen, setManualShipmentOpen] = useState(false)
+  const [directShipment, setDirectShipment] = useState(null)
+  const [directShipmentMessage, setDirectShipmentMessage] = useState({ id: '', text: '' })
+  const [manualShipmentForm, setManualShipmentForm] = useState(initialManualShipmentForm)
   const [desktopPrinters, setDesktopPrinters] = useState([])
   const [selectedDesktopPrinter, setSelectedDesktopPrinter] = useState(() => localStorage.getItem('zyro-selected-printer') || '')
   const [printerSettingsBusy, setPrinterSettingsBusy] = useState(false)
@@ -1341,7 +1450,7 @@ function App() {
       'zyro-payment-settings': applyPaymentSettings,
       'zyro-lab-tests': setLabTests,
       'zyro-cost-calculations': setProductionCalculations,
-      'zyro-elster-setup': (value) => setElsterSetup(elsterSetupFromEntries(value)),
+      'zyro-contract-jobs': setContractJobs,
       'zyro-company-details': (value) => {
         const details = { ...initialInvoiceCompanyDetails, ...(Array.isArray(value) ? value.find((entry) => entry?.id === 'global') : {}) }
         setInvoiceCompanyDetails(details)
@@ -1361,6 +1470,7 @@ function App() {
       'zyro-qm-documents': setQmDocuments,
       'zyro-products': setProducts,
       'zyro-recipes': setRecipes,
+      'zyro-raw-materials': setRawMaterials,
       'zyro-inventory': setInventory,
       'zyro-website-orders': setWebsiteOrders,
       'zyro-delete-requests': setDeleteRequests,
@@ -1489,6 +1599,10 @@ function App() {
   }, [recipes, authSessionToken])
 
   useEffect(() => {
+    persistCollection('zyro-raw-materials', rawMaterials, authSessionToken)
+  }, [rawMaterials, authSessionToken])
+
+  useEffect(() => {
     persistCollection('zyro-lab-tests', labTests, authSessionToken)
   }, [labTests, authSessionToken])
 
@@ -1537,6 +1651,10 @@ function App() {
   useEffect(() => {
     persistCollection('zyro-cost-calculations', productionCalculations, authSessionToken)
   }, [productionCalculations, authSessionToken])
+
+  useEffect(() => {
+    if (currentUser?.role === 'admin') persistCollection('zyro-contract-jobs', contractJobs, authSessionToken)
+  }, [contractJobs, authSessionToken, currentUser?.role])
 
   useEffect(() => {
     persistCollection('zyro-stock-movements', stockMovements, authSessionToken)
@@ -1720,6 +1838,7 @@ function App() {
       'zyro-users': setUsers,
       'zyro-products': setProducts,
       'zyro-recipes': setRecipes,
+      'zyro-raw-materials': setRawMaterials,
       'zyro-lab-tests': setLabTests,
       'zyro-orders': setOrders,
       'zyro-sales-documents': setSalesDocuments,
@@ -1730,7 +1849,7 @@ function App() {
       'zyro-payment-requests': setPaymentRequests,
       'zyro-payment-settings': applyPaymentSettings,
       'zyro-cost-calculations': setProductionCalculations,
-      'zyro-elster-setup': (entries) => setElsterSetup(elsterSetupFromEntries(entries)),
+      'zyro-contract-jobs': setContractJobs,
       'zyro-company-details': (entries) => {
         const details = { ...initialInvoiceCompanyDetails, ...(Array.isArray(entries) ? entries.find((entry) => entry?.id === 'global') : {}) }
         setInvoiceCompanyDetails(details)
@@ -1759,6 +1878,7 @@ function App() {
       'zyro-activation-keys': [],
       'zyro-products': seedProducts,
       'zyro-recipes': seedRecipes,
+      'zyro-raw-materials': [],
       'zyro-lab-tests': [],
       'zyro-orders': seedOrders,
       'zyro-sales-documents': [],
@@ -1769,7 +1889,7 @@ function App() {
       'zyro-payment-requests': [],
       'zyro-payment-settings': [],
       'zyro-cost-calculations': [],
-      'zyro-elster-setup': [],
+      'zyro-contract-jobs': [],
       'zyro-company-details': [initialInvoiceCompanyDetails],
       'zyro-bottler-details': [initialBottlerDetails],
       'zyro-stock-movements': [],
@@ -2081,7 +2201,7 @@ function App() {
   }, [activeTab, currentUser?.role, authSessionToken])
 
   const availableTabs = currentUser?.role === 'admin'
-    ? [...baseTabs, 'dienstplan', 'shop', 'anfragen', 'postfach', 'admin', 'protokoll', 'finanzen', 'zahlungen', 'kalkulation']
+    ? [...baseTabs, 'dienstplan', 'shop', 'anfragen', 'postfach', 'newsletter', 'admin', 'protokoll', 'finanzen', 'zahlungen', 'kalkulation', 'lohnherstellung']
     : employeePermissionTabs.filter((tab) => {
       const permissions = currentUser?.permissions || baseTabs
       return permissions.includes(tab)
@@ -2597,35 +2717,6 @@ function App() {
       return null
     }
   }, [productionCalculationForm])
-  const elsterPreview = useMemo(
-    () => calculateVatSubmissionPreview(financeEntries, financeMonth, elsterSetup.filingPeriod),
-    [financeEntries, financeMonth, elsterSetup.filingPeriod],
-  )
-  useEffect(() => {
-    if (activeTab !== 'finanzen' || currentUser?.role !== 'admin' || !authSessionToken || !networkInitialized) return
-    const existing = window.zyroData?.get('zyro-elster-setup', authSessionToken)
-    if (Array.isArray(existing?.value) && existing.value.length > 0) return
-    if (networkStatus.mode === 'client' || !window.zyroElster) return
-    let isActive = true
-    window.zyroElster.getSetup(authSessionToken)
-      .then(async (setup) => {
-        const hasLegacyValues = Object.entries(setup).some(([field, value]) => (
-          field !== 'filingPeriod' && field !== 'developerStatus' && value !== ''
-        ))
-        if (!isActive || !hasLegacyValues) return
-        const result = await window.zyroData.set('zyro-elster-setup', [elsterSetupEntry(setup)], authSessionToken)
-        if (result?.success === false) throw new Error(result.message || 'Speichern fehlgeschlagen.')
-        setElsterSetup({ ...initialElsterSetup, ...setup })
-        setElsterSetupMessage(networkStatus.cloudEnabled || networkStatus.mode === 'client'
-          ? 'Bisherige lokale Angaben wurden übernommen und werden mit der Cloud synchronisiert.'
-          : 'Bisherige lokale Angaben wurden übernommen. Cloud-Sync ist noch nicht aktiviert.')
-      })
-      .catch((error) => {
-        if (isActive) setElsterSetupMessage(`ELSTER-Einstellungen konnten nicht geladen werden: ${error.message}`)
-      })
-    return () => { isActive = false }
-  }, [activeTab, currentUser?.role, authSessionToken, networkInitialized, networkStatus.mode, networkStatus.cloudEnabled])
-
   const formatFinanceEuro = (cents) => new Intl.NumberFormat('de-DE', {
     style: 'currency',
     currency: 'EUR',
@@ -3245,6 +3336,207 @@ function App() {
     const { name, value } = event.target
     setRecipeForm((current) => ({ ...current, [name]: value }))
   }
+
+  // ---- Rohstoff-Datenbank ----
+  const resetRawMaterialForm = () => {
+    setRawMaterialForm(initialRawMaterialForm)
+    setEditingRawMaterialId(null)
+  }
+
+  const saveRawMaterial = (event) => {
+    event.preventDefault()
+    const error = validateRawMaterial(rawMaterialForm, rawMaterials, editingRawMaterialId)
+    if (error) {
+      setRawMaterialMessage(error)
+      return
+    }
+    const now = getCurrentTimestamp()
+    const existing = rawMaterials.find((entry) => String(entry.id) === String(editingRawMaterialId))
+    const entry = {
+      ...existing,
+      id: existing?.id ?? `rm-${Date.now().toString(36)}`,
+      name: rawMaterialForm.name.trim(),
+      eNumber: String(rawMaterialForm.eNumber || '').trim().toUpperCase().replace(/^E\s*(?=\d)/, 'E '),
+      additiveClass: String(rawMaterialForm.additiveClass || '').trim(),
+      articleNumber: rawMaterialForm.articleNumber.trim(),
+      category: rawMaterialForm.category,
+      supplier: rawMaterialForm.supplier.trim(),
+      unit: rawMaterialForm.unit,
+      pricePerUnit: String(rawMaterialForm.pricePerUnit || '').trim(),
+      // Richtwert-Kennzeichen nur behalten, solange Preis und Einheit unverändert sind.
+      priceSource: existing?.priceSource === 'Richtwert'
+        && String(existing.pricePerUnit ?? '') === String(rawMaterialForm.pricePerUnit || '').trim()
+        && existing.unit === rawMaterialForm.unit ? 'Richtwert' : '',
+      allergens: rawMaterialForm.allergens.trim(),
+      notes: rawMaterialForm.notes.trim(),
+      createdAt: existing?.createdAt || now,
+      updatedAt: now,
+    }
+    setRawMaterials((current) => existing
+      ? current.map((item) => String(item.id) === String(existing.id) ? entry : item)
+      : [entry, ...current])
+    // Umbenennung in offenen Rezepturzeilen nachziehen.
+    if (existing && existing.name !== entry.name) {
+      setRecipeItems((current) => current.map((item) => String(item.rawMaterialId) === String(entry.id) ? { ...item, name: entry.name } : item))
+    }
+    setRawMaterialMessage(existing ? `„${entry.name}“ gespeichert.` : `„${entry.name}“ angelegt.`)
+    resetRawMaterialForm()
+  }
+
+  const editRawMaterial = (entry) => {
+    setEditingRawMaterialId(entry.id)
+    setRawMaterialForm({ ...initialRawMaterialForm, ...entry, pricePerUnit: String(entry.pricePerUnit ?? '') })
+    setRawMaterialMessage('')
+  }
+
+  const rawMaterialUsage = (entry) => recipes.filter((recipe) => (recipe.items || [])
+    .some((item) => String(item.rawMaterialId) === String(entry.id))).map((recipe) => recipe.name)
+
+  const removeRawMaterial = (entry) => {
+    const usedIn = rawMaterialUsage(entry)
+    if (usedIn.length) {
+      setRawMaterialMessage(`„${entry.name}“ wird noch in ${usedIn.join(', ')} verwendet und kann nicht gelöscht werden.`)
+      return
+    }
+    if (!window.confirm(`Rohstoff „${entry.name}“ löschen?`)) return
+    setRawMaterials((current) => current.filter((item) => String(item.id) !== String(entry.id)))
+    setRawMaterialMessage(`„${entry.name}“ gelöscht.`)
+    if (String(editingRawMaterialId) === String(entry.id)) resetRawMaterialForm()
+  }
+
+  // Lagerartikel und Zutaten bestehender Rezepturen einmalig als Rohstoffe übernehmen.
+  const importRawMaterialsFromExisting = () => {
+    const known = new Set(rawMaterials.map((entry) => String(entry.name || '').trim().toLowerCase()))
+    const names = [
+      ...inventory.map((entry) => entry.item),
+      ...recipes.flatMap((recipe) => (recipe.items?.length ? recipe.items.map((item) => item.name) : parseIngredientText(recipe.ingredients).map((item) => item.name))),
+    ].map((name) => String(name || '').trim()).filter(Boolean)
+    const now = getCurrentTimestamp()
+    const additions = []
+    names.forEach((name) => {
+      if (known.has(name.toLowerCase())) return
+      known.add(name.toLowerCase())
+      additions.push({ ...initialRawMaterialForm, id: `rm-${Date.now().toString(36)}-${additions.length}`, name, createdAt: now, updatedAt: now })
+    })
+    if (!additions.length) {
+      setRawMaterialMessage('Alle Lagerartikel und Rezeptur-Zutaten sind bereits als Rohstoff angelegt.')
+      return
+    }
+    setRawMaterials((current) => [...additions, ...current])
+    setRawMaterialMessage(`${additions.length} Rohstoffe übernommen. Bitte Einheit, Preis und Lieferant ergänzen.`)
+  }
+
+  // ---- EU-Katalog (E-Nummern + Getränke-Grundstoffe) ----
+  const newRawMaterialId = (suffix = '') => `rm-${Date.now().toString(36)}${suffix}`
+
+  const addCatalogEntriesToDatabase = (entries) => {
+    const now = getCurrentTimestamp()
+    const created = entries.map((entry, index) => catalogEntryToRawMaterial(entry, newRawMaterialId(`-${index}`), now))
+    if (created.length) setRawMaterials((current) => [...created, ...current])
+    return created
+  }
+
+  const importCatalogEntry = (entry) => {
+    const [created] = addCatalogEntriesToDatabase([entry])
+    setRawMaterialMessage(`„${rawMaterialLabel(created)}“ übernommen. Preis und Lieferant bei Bedarf ergänzen.`)
+  }
+
+  const importAllCatalogEntries = (entries) => {
+    if (!entries.length) return
+    if (!window.confirm(`${entries.length} Rohstoffe aus dem Katalog in die Rohstoff-Datenbank übernehmen?`)) return
+    addCatalogEntriesToDatabase(entries)
+    setRawMaterialMessage(`${entries.length} Rohstoffe aus dem Katalog übernommen.`)
+  }
+
+  const addCatalogEntryToRecipe = (entry) => {
+    const [created] = addCatalogEntriesToDatabase([entry])
+    addRecipeItem(created)
+  }
+
+  // ---- Rezepturzeilen ----
+  const addRecipeItem = (rawMaterial) => {
+    setRecipeItems((current) => [...current, createRecipeItem(rawMaterial)])
+    setRecipeMaterialSearch('')
+  }
+
+  const addRecipeItemFromSearch = (createInDatabase) => {
+    const name = recipeMaterialSearch.trim()
+    if (!name) return
+    if (!createInDatabase) {
+      addRecipeItem(null)
+      setRecipeItems((current) => current.map((item, index) => index === current.length - 1 ? { ...item, name } : item))
+      return
+    }
+    const existing = rawMaterials.find((entry) => String(entry.name || '').trim().toLowerCase() === name.toLowerCase())
+    if (existing) {
+      addRecipeItem(existing)
+      return
+    }
+    const now = getCurrentTimestamp()
+    const entry = { ...initialRawMaterialForm, id: `rm-${Date.now().toString(36)}`, name, createdAt: now, updatedAt: now }
+    setRawMaterials((current) => [entry, ...current])
+    addRecipeItem(entry)
+  }
+
+  // Fehlende Preise mit Richtpreisen aus dem Katalog füllen (ids: nur diese Rohstoffe).
+  const applyReferencePrices = (ids = null, setMessage = setRawMaterialMessage) => {
+    const { list, updated } = fillReferencePrices(rawMaterials, getCurrentTimestamp(), ids)
+    if (!updated.length) {
+      setMessage('Für die Rohstoffe ohne Preis ist kein Richtpreis im Katalog hinterlegt – bitte Preis selbst eintragen.')
+      return
+    }
+    setRawMaterials(list)
+    setMessage(`Richtpreis (Stand ${referencePriceDate}) eingetragen für: ${updated.join(', ')}. Bitte später durch Lieferantenpreise ersetzen.`)
+  }
+
+  // Eine Zeile „auffüllen auf Batchgröße“ markieren – immer nur eine.
+  const toggleRecipeFillUp = (id) => {
+    setRecipeItems((current) => current.map((item) => {
+      if (item.id !== id) return item.fillUp ? { ...item, fillUp: false } : item
+      if (item.fillUp) return { ...item, fillUp: false }
+      return { ...item, fillUp: true, unit: ['ml', 'l', 'g', 'kg'].includes(item.unit) ? item.unit : 'ml' }
+    }))
+  }
+
+  const updateRecipeItem = (id, field, value) => {
+    setRecipeItems((current) => current.map((item) => item.id === id ? { ...item, [field]: value } : item))
+  }
+
+  const moveRecipeItem = (id, direction) => {
+    setRecipeItems((current) => {
+      const index = current.findIndex((item) => item.id === id)
+      const target = index + direction
+      if (index < 0 || target < 0 || target >= current.length) return current
+      const next = [...current]
+      ;[next[index], next[target]] = [next[target], next[index]]
+      return next
+    })
+  }
+
+  const removeRecipeItem = (id) => setRecipeItems((current) => current.filter((item) => item.id !== id))
+
+  const recipeCalculation = useMemo(
+    () => calculateRecipe(recipeItems, rawMaterials, recipeForm.batchSize),
+    [recipeItems, rawMaterials, recipeForm.batchSize],
+  )
+  const recipeMaterialResults = useMemo(
+    () => (recipeMaterialSearch.trim() ? searchRawMaterials(rawMaterials, recipeMaterialSearch) : []),
+    [rawMaterials, recipeMaterialSearch],
+  )
+  const recipeCatalogResults = useMemo(
+    () => (recipeMaterialSearch.trim() ? searchCatalog(rawMaterials, recipeMaterialSearch, 6) : []),
+    [rawMaterials, recipeMaterialSearch],
+  )
+  const catalogResults = useMemo(() => {
+    const byClass = (entry) => !catalogClass || (catalogClass === '__base__' ? !entry.eNumber : entry.additiveClass === catalogClass)
+    return catalogQuery.trim()
+      ? searchCatalog(rawMaterials, catalogQuery, Infinity).filter(byClass)
+      : missingCatalogEntries(rawMaterials, byClass)
+  }, [rawMaterials, catalogQuery, catalogClass])
+  const filteredRawMaterials = useMemo(
+    () => searchRawMaterials(rawMaterials, rawMaterialFilter, Infinity),
+    [rawMaterials, rawMaterialFilter],
+  )
 
   const handleLabReportUpload = async (event, setForm) => {
     const files = Array.from(event.target.files || [])
@@ -4057,15 +4349,44 @@ function App() {
 
   const addRecipe = (event) => {
     event.preventDefault()
-    if (!recipeForm.name.trim() || !recipeForm.ingredients.trim()) return
+    const enteredItems = recipeItems
+      .filter((item) => String(item.name || '').trim())
+      .map(({ id, rawMaterialId, name, amount, unit, note, fillUp }) => ({
+        id, rawMaterialId: rawMaterialId || '', name: String(name).trim(), amount: String(amount ?? '').trim(), unit, note: String(note || '').trim(),
+        ...(fillUp ? { fillUp: true } : {}),
+      }))
+    const fillUpCheck = calculateRecipe(enteredItems, rawMaterials, recipeForm.batchSize || '5.000ml').fillUp
+    if (fillUpCheck?.error) {
+      setRecipeFormMessage(`Auffüllen: ${fillUpCheck.error}`)
+      return
+    }
+    // Berechnete Auffüll-Menge (z. B. Wasser ad Batchgröße) fest speichern.
+    const items = applyFillUp(enteredItems, recipeForm.batchSize || '5.000ml')
+    const ingredientsText = items.length ? recipeItemsToText(items) : ''
+    if (!recipeForm.name.trim()) {
+      setRecipeFormMessage('Bitte einen Rezeptnamen eingeben.')
+      return
+    }
+    if (!items.length) {
+      setRecipeFormMessage('Bitte mindestens einen Rohstoff hinzufügen.')
+      return
+    }
+    if (items.some((item) => !(parseAmount(item.amount) > 0))) {
+      setRecipeFormMessage(`Bitte für alle Rohstoffe eine Menge eingeben (fehlt bei: ${items.filter((item) => !(parseAmount(item.amount) > 0)).map((item) => item.name).join(', ')}).`)
+      return
+    }
 
     const existingRecipe = recipes.find((recipe) => recipe.id === editingRecipeId)
     const recipeDetailsChanged = existingRecipe && [
       recipeForm.name.trim() !== existingRecipe.name,
       recipeForm.type !== existingRecipe.type,
+      (recipeForm.kind || 'Fertiges Getränk') !== (existingRecipe.kind || 'Fertiges Getränk'),
+      (recipeForm.kind === 'Konzentrat' ? String(recipeForm.dilution || '').trim() : '') !== (existingRecipe.dilution || ''),
       (recipeForm.batchSize || '5.000ml') !== existingRecipe.batchSize,
       (recipeForm.description.trim() || 'Neue Rezeptur') !== existingRecipe.description,
-      recipeForm.ingredients.trim() !== existingRecipe.ingredients,
+      ingredientsText !== existingRecipe.ingredients,
+      JSON.stringify(items.map(({ rawMaterialId, amount, unit }) => [rawMaterialId, amount, unit]))
+        !== JSON.stringify((existingRecipe.items || []).map(({ rawMaterialId, amount, unit }) => [rawMaterialId, amount, unit])),
     ].some(Boolean)
     const approvalInvalidated = recipeDetailsChanged && isRecipeApproved(existingRecipe)
     const newRecipe = {
@@ -4073,9 +4394,12 @@ function App() {
       id: editingRecipeId ?? Date.now(),
       name: recipeForm.name.trim(),
       type: recipeForm.type,
+      kind: recipeForm.kind || 'Fertiges Getränk',
+      dilution: recipeForm.kind === 'Konzentrat' ? String(recipeForm.dilution || '').trim() : '',
       batchSize: recipeForm.batchSize || '5.000ml',
       description: recipeForm.description.trim() || 'Neue Rezeptur',
-      ingredients: recipeForm.ingredients.trim(),
+      ingredients: ingredientsText,
+      items,
       labReports: recipeForm.labReports || existingRecipe?.labReports || [],
       status: approvalInvalidated ? 'In Prüfung' : existingRecipe?.status || 'In Prüfung',
       approvedAt: approvalInvalidated ? undefined : existingRecipe?.approvedAt,
@@ -4088,6 +4412,9 @@ function App() {
       : current.map((recipe) => recipe.id === editingRecipeId ? newRecipe : recipe))
     setEditingRecipeId(null)
     setRecipeForm(initialRecipeForm)
+    setRecipeItems([])
+    setRecipeMaterialSearch('')
+    setRecipeFormMessage('')
     setRecipeAiMessage('')
     setRecipeApprovalMessage(approvalInvalidated ? 'Änderungen gespeichert. Die Rezeptur muss erneut freigegeben werden.' : '')
   }
@@ -4107,13 +4434,21 @@ function App() {
     setRecipeForm({
       name: recipe.name || '',
       type: recipe.type || 'Energy',
+      kind: recipe.kind || 'Fertiges Getränk',
+      dilution: recipe.dilution || '',
       batchSize: recipe.batchSize || '',
       description: recipe.description || '',
       ingredients: recipe.ingredients || '',
       labReports: recipe.labReports || [],
       aiGenerated: Boolean(recipe.aiGenerated),
     })
+    // Ältere Rezepturen haben nur Freitext – beim Bearbeiten in Zeilen umwandeln und Rohstoffe per Name zuordnen.
+    setRecipeItems(recipe.items?.length
+      ? recipe.items.map((item) => ({ ...createRecipeItem(), ...item }))
+      : parseIngredientText(recipe.ingredients, rawMaterials))
+    setRecipeMaterialSearch('')
     setRecipeAiMessage('')
+    setRecipeView('rezepturen')
   }
 
   const developRecipe = async () => {
@@ -4158,6 +4493,7 @@ function App() {
         ingredients,
         aiGenerated: true,
       }))
+      setRecipeItems(parseIngredientText(ingredients, rawMaterials))
       setRecipeAiMessage('KI-Entwurf erstellt. Zutaten und Mengen vor einer Produktionsfreigabe fachlich prüfen.')
     } catch (error) {
       setRecipeAiMessage(`Rezeptur konnte nicht entwickelt werden: ${error.message}`)
@@ -4459,6 +4795,121 @@ function App() {
     showPrintPreview(printWindow)
   }
 
+  // Rezepturdruck: eine oder alle Rezepturen als modernes Rezepturblatt (mit Rohstoffen, Mengen, Anteil, Kosten).
+  const printRecipeList = (recipeList = recipes) => {
+    const printWindow = window.open('', '_blank')
+    if (!printWindow) return
+    const withCosts = recipePrintWithCosts
+    const list = [...recipeList].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'de'))
+    const single = list.length === 1
+    const printDate = formatTimestamp(getCurrentTimestamp()).split(',')[0]
+    const euro = (value, digits = 2) => Number(value).toLocaleString('de-DE', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: digits })
+    const number = (value, digits = 2) => Number(value).toLocaleString('de-DE', { maximumFractionDigits: digits })
+    const approvedCount = list.filter((recipe) => recipe.status === 'Freigegeben').length
+    const prepared = list.map((recipe, index) => {
+      const items = recipe.items?.length ? recipe.items : parseIngredientText(recipe.ingredients, rawMaterials)
+      return { recipe, index, calc: calculateRecipe(items, rawMaterials, recipe.batchSize) }
+    })
+    const statusClass = (status) => status === 'Freigegeben' ? 'ok' : status === 'In Prüfung' ? 'warn' : 'neutral'
+
+    const overview = single ? '' : `<section class="overview">
+      <div class="kpis"><div><span>Rezepturen</span><strong>${list.length}</strong></div><div><span>Freigegeben</span><strong>${approvedCount}</strong></div><div><span>Rohstoffe</span><strong>${new Set(prepared.flatMap(({ calc }) => calc.rows.map((row) => row.rawMaterialId || row.name))).size}</strong></div></div>
+      <table class="toc"><thead><tr><th>#</th><th>Rezeptur</th><th>Kategorie</th><th>Batch</th><th>Status</th>${withCosts ? '<th class="num">Kosten/Charge</th>' : ''}</tr></thead><tbody>
+      ${prepared.map(({ recipe, index, calc }) => `<tr><td>${index + 1}</td><td><a href="#r${index + 1}">${escapeHtml(recipe.name || 'Ohne Namen')}</a></td><td>${escapeHtml(recipe.type || '–')}</td><td>${escapeHtml(recipe.batchSize || '–')}</td><td><span class="status ${statusClass(recipe.status)}">${escapeHtml(recipe.status || '–')}</span></td>${withCosts ? `<td class="num">${calc.rows.length ? `${euro(calc.totalCost)}${calc.costComplete ? '' : '*'}` : '–'}</td>` : ''}</tr>`).join('')}
+      </tbody></table></section>`
+
+    const sheets = prepared.map(({ recipe, index, calc }) => {
+      const approval = recipe.status === 'Freigegeben' && recipe.approvedAt
+        ? `${escapeHtml(recipe.approvedBy || 'Admin')} · ${escapeHtml(new Date(recipe.approvedAt).toLocaleDateString('de-DE'))}`
+        : 'Ausstehend'
+      const rows = calc.rows.map((row, position) => `<tr>
+        <td class="pos">${position + 1}</td>
+        <td><strong>${escapeHtml(row.name || 'Ohne Namen')}${row.rawMaterial?.eNumber ? ` <em class="e">${escapeHtml(row.rawMaterial.eNumber)}</em>` : ''}</strong>${row.rawMaterial && (row.rawMaterial.additiveClass || row.rawMaterial.articleNumber || row.rawMaterial.supplier) ? `<small>${escapeHtml([row.rawMaterial.additiveClass, row.rawMaterial.articleNumber, row.rawMaterial.supplier].filter(Boolean).join(' · '))}</small>` : ''}</td>
+        <td class="num amount">${Number.isFinite(parseAmount(row.amount)) ? number(parseAmount(row.amount), 3) : escapeHtml(row.amount || '–')} <span>${escapeHtml(row.unit || '')}</span></td>
+        <td class="share">${row.share === null ? '–' : `<div class="bar"><i style="width:${Math.min(100, row.share).toFixed(2)}%"></i></div><span>${number(row.share)} %</span>`}</td>
+        ${withCosts ? `<td class="num">${row.cost === null ? '–' : euro(row.cost)}</td>` : ''}
+        <td class="note">${escapeHtml(row.note || '')}</td>
+        <td class="check"><span></span></td>
+      </tr>`).join('')
+      const missing = withCosts && !calc.costComplete && calc.rows.length
+        ? `<p class="footnote">* Ohne Preis in der Rohstoff-Datenbank: ${escapeHtml(calc.missingPrices.join(', '))}</p>` : ''
+      // Zutatenverzeichnis-Entwurf: absteigend nach Menge, Zusatzstoffe mit Klasse und E-Nummer.
+      const declarationItems = [...calc.rows].filter((row) => row.name)
+        .sort((a, b) => (b.baseAmount ?? -1) - (a.baseAmount ?? -1))
+        .map((row) => (row.rawMaterial?.eNumber
+          ? `${row.rawMaterial.additiveClass ? `${row.rawMaterial.additiveClass}: ` : ''}${row.name} (${row.rawMaterial.eNumber})`
+          : row.name))
+      const declaration = declarationItems.length
+        ? `<div class="declaration"><strong>Zutatenverzeichnis – Entwurf (absteigend nach Menge, vor Verwendung prüfen)</strong>${escapeHtml(declarationItems.join(', '))}</div>` : ''
+      const labReports = recipe.labReports?.length ? `<p class="footnote">Laborberichte: ${recipe.labReports.map((report) => escapeHtml(report.name)).join(', ')}</p>` : ''
+      return `<article class="sheet" id="r${index + 1}">
+        <div class="sheet-head">
+          <div><p class="eyebrow">Rezeptur${single ? '' : ` ${index + 1} / ${list.length}`} · ${escapeHtml(recipe.type || '–')}</p><h2>${escapeHtml(recipe.name || 'Ohne Namen')}</h2>
+          ${recipe.description ? `<p class="lead">${escapeHtml(recipe.description)}</p>` : ''}</div>
+          <span class="status ${statusClass(recipe.status)}">${escapeHtml(recipe.status || '–')}</span>
+        </div>
+        <div class="facts">
+          <div><span>Batchgröße</span><strong>${escapeHtml(recipe.batchSize || '–')}</strong></div>
+          <div><span>Positionen</span><strong>${calc.rows.length}</strong></div>
+          <div><span>Gesamtmenge</span><strong>${calc.totalBase > 0 ? `${number(calc.totalBase, 1)} g/ml` : '–'}</strong></div>
+          ${withCosts ? `<div><span>Kosten je Charge</span><strong>${euro(calc.totalCost)}${calc.costComplete ? '' : '*'}</strong></div><div><span>Kosten je Liter</span><strong>${calc.costPerLiter !== null ? euro(calc.costPerLiter, 3) : '–'}</strong></div>` : ''}
+          <div><span>Freigabe</span><strong>${approval}</strong></div>
+        </div>
+        <table class="items"><thead><tr><th class="pos">#</th><th>Rohstoff</th><th class="num">Menge</th><th>Anteil</th>${withCosts ? '<th class="num">Kosten</th>' : ''}<th>Hinweis / Zugabe</th><th class="check">✓</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="${withCosts ? 7 : 6}" class="empty">Keine Rohstoffe hinterlegt</td></tr>`}</tbody>
+          ${calc.rows.length ? `<tfoot><tr><td></td><td>Summe</td><td class="num amount">${calc.totalBase > 0 ? `${number(calc.totalBase, 1)} <span>g/ml</span>` : '–'}</td><td class="share"><span>${calc.totalBase > 0 ? '100 %' : ''}</span></td>${withCosts ? `<td class="num">${euro(calc.totalCost)}${calc.costComplete ? '' : '*'}</td>` : ''}<td colspan="2"></td></tr></tfoot>` : ''}
+        </table>
+        ${declaration}
+        <p class="footnote">Anteil nach Gewicht/Volumen, Flüssigkeiten mit Dichte 1 gerechnet. Die Spalte ✓ dient zum Abhaken bei der Einwaage.</p>
+        ${missing}${labReports}
+        <div class="signatures"><div>Eingewogen von · Datum</div><div>Geprüft von · Datum</div><div>Charge</div></div>
+      </article>`
+    }).join('')
+
+    printWindow.document.write(`<!doctype html><html lang="de"><head><meta charset="utf-8"><title>${single ? `Rezeptur ${escapeHtml(list[0].name || '')}` : `Rezepturliste ${escapeHtml(printDate)}`}</title><style>
+      @page{size:A4;margin:14mm 14mm 16mm}
+      :root{--ink:#0f1c24;--muted:#5d6b74;--line:#e3e8eb;--soft:#f4f7f8;--brand:#19816c;--brand-soft:#e3f3ef}
+      *{box-sizing:border-box}
+      body{margin:32px auto;max-width:900px;padding:0 28px;color:var(--ink);font:12.5px/1.5 "Segoe UI",Inter,system-ui,-apple-system,Arial,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+      .doc-head{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;padding-bottom:16px;margin-bottom:22px;border-bottom:1px solid var(--line)}
+      .brand{display:flex;align-items:center;gap:12px}.brand i{width:10px;height:38px;border-radius:3px;background:var(--brand)}
+      .doc-head h1{margin:0;font-size:24px;letter-spacing:-.02em}.doc-head p{margin:2px 0 0;color:var(--muted)}
+      .doc-meta{text-align:right;color:var(--muted);font-size:11.5px}
+      .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px}
+      .kpis div,.facts div{background:var(--soft);border-radius:10px;padding:10px 12px}
+      .kpis span,.facts span{display:block;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+      .kpis strong{font-size:22px}.facts strong{font-size:14px}
+      table{width:100%;border-collapse:collapse}th{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600;text-align:left;padding:8px 8px;border-bottom:1.5px solid var(--ink)}
+      td{padding:8px;border-bottom:1px solid var(--line);vertical-align:top}.num{text-align:right;white-space:nowrap}
+      a{color:inherit;text-decoration:none}
+      .toc td:nth-child(2){font-weight:600}
+      .sheet{padding-top:6px}.overview+.sheet,.sheet+.sheet{break-before:page;page-break-before:always}
+      .sheet-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:14px}
+      .eyebrow{margin:0;color:var(--brand);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.08em}
+      .sheet-head h2{margin:2px 0 4px;font-size:28px;letter-spacing:-.02em;line-height:1.15}.lead{margin:0;color:var(--muted);max-width:620px;white-space:pre-wrap}
+      .status{display:inline-block;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:600;white-space:nowrap;background:var(--soft);color:var(--muted)}
+      .status.ok{background:var(--brand-soft);color:var(--brand)}.status.warn{background:#fff4dc;color:#94650a}
+      .facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:18px}
+      .items em.e{font-style:normal;font-size:10px;font-weight:600;color:var(--brand);background:var(--brand-soft);border-radius:4px;padding:1px 5px;margin-left:4px;white-space:nowrap}
+      .declaration{margin-top:14px;padding:10px 12px;border-radius:10px;background:var(--soft);font-size:11.5px}.declaration strong{display:block;font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:2px}
+      .items .pos{width:28px;color:var(--muted)}.items td strong{display:block}.items small{display:block;color:var(--muted);font-size:10.5px}
+      .amount{font-weight:600;font-variant-numeric:tabular-nums}.amount span{font-weight:400;color:var(--muted)}
+      .share{width:140px}.share .bar{height:6px;border-radius:3px;background:var(--soft);overflow:hidden;margin:5px 0 3px}.share .bar i{display:block;height:100%;background:var(--brand);border-radius:3px}.share span{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+      .note{color:var(--muted);font-size:11.5px}.check{width:30px;text-align:center}.check span{display:inline-block;width:14px;height:14px;border:1.5px solid #9aa7ae;border-radius:3px}
+      tfoot td{border-bottom:none;border-top:1.5px solid var(--ink);font-weight:700}.empty{color:var(--muted);text-align:center;padding:18px}
+      tr{break-inside:avoid;page-break-inside:avoid}
+      .footnote{margin:8px 0 0;color:var(--muted);font-size:10.5px}
+      .signatures{display:grid;grid-template-columns:repeat(3,1fr);gap:28px;margin-top:42px}.signatures div{border-top:1px solid var(--muted);padding-top:6px;font-size:10.5px;color:var(--muted)}
+      @media print{body{margin:0;padding:0;max-width:none}}
+    </style></head><body>
+      <header class="doc-head"><div class="brand"><i></i><div><h1>${single ? 'Rezepturblatt' : 'Rezepturliste'}</h1><p>${escapeHtml([companyDetails.name, companyDetails.street, companyDetails.city].filter(Boolean).join(' · '))}</p></div></div>
+      <div class="doc-meta">Stand ${escapeHtml(printDate)}<br>${withCosts ? 'mit Kosten · vertraulich' : 'ohne Kosten'}</div></header>
+      ${list.length ? `${overview}${sheets}` : '<p>Keine Rezepturen vorhanden.</p>'}
+    </body></html>`)
+    printWindow.document.close()
+    showPrintPreview(printWindow)
+  }
+
   const buildSalesDocumentItems = (previousItems = []) => salesDocumentForm.items.map((line) => {
     const product = line.productId && line.productId !== '__custom__'
       ? products.find((entry) => String(entry.id) === String(line.productId))
@@ -4484,6 +4935,8 @@ function App() {
         : productName,
       quantity: Number(line.quantity),
       unitPrice: Number(line.unitPrice),
+      // Versand ist eine eigene Belegposition – wird beim Scannen und im Lager ignoriert.
+      ...(String(productCategory).trim().toLowerCase() === 'versand' ? { isShipping: true } : {}),
     }
   })
 
@@ -4512,7 +4965,7 @@ function App() {
     const id = editingSalesDocumentId ?? crypto.randomUUID()
     const prefix = salesDocumentTypes[salesDocumentForm.kind].prefix
     const lastNumber = salesDocuments
-      .filter((salesDocument) => salesDocument.kind === salesDocumentForm.kind && salesDocument.id !== editingSalesDocumentId)
+      .filter((salesDocument) => salesDocument.kind === salesDocumentForm.kind && salesDocument.id !== editingSalesDocumentId && !salesDocument.manualShipment)
       .reduce((highest, salesDocument) => Math.max(highest, Number(salesDocument.number.split('-').at(-1)) || 0), 0)
     const documentDate = salesDocumentForm.documentDate || getCurrentTimestamp().slice(0, 10)
     const year = documentDate.slice(0, 4)
@@ -4749,7 +5202,7 @@ function App() {
     const documentDate = new Date().toISOString().slice(0, 10)
     const year = documentDate.slice(0, 4)
     const lastNumber = salesDocuments
-      .filter((entry) => entry.kind === targetKind)
+      .filter((entry) => entry.kind === targetKind && !entry.manualShipment)
       .reduce((highest, entry) => Math.max(highest, Number(entry.number.split('-').at(-1)) || 0), 0)
     const id = Date.now()
     const followup = {
@@ -5577,11 +6030,22 @@ function App() {
   }
 
   const getShipmentDraft = (salesDocument) => mdeShipmentDrafts[salesDocument.id] || {
-      carrier: salesDocument.carrier === 'Spedition' ? 'Spedition' : 'DPD',
+      carrier: shipmentCarriers.includes(salesDocument.carrier) ? salesDocument.carrier : 'DPD',
       carrierName: salesDocument.carrierName || '',
       trackingNumber: salesDocument.trackingNumber || '',
       trackingUrl: salesDocument.trackingUrl || '',
+      labelMode: 'existing',
+      weightKg: getOrderWeightKg(salesDocument) || '',
+      dpdProduct: 'CL',
     }
+
+  function getOrderWeightKg(salesDocument) {
+    const weight = getSalesDocumentItems(salesDocument).reduce((sum, item) => {
+      const product = products.find((entry) => String(entry.id) === String(item.productId) || (item.productSku && entry.sku === item.productSku))
+      return sum + (Number(item.quantity) || 0) * (Number(product?.weightKg) || 0)
+    }, 0)
+    return weight > 0 ? Math.round(weight * 100) / 100 : ''
+  }
 
     const refreshDesktopPrinters = async () => {
       if (!window.zyroPrinter?.getPrinters) {
@@ -5679,7 +6143,7 @@ function App() {
         const settings = await window.zyroMde.saveDpdSettings(dpdSettingsForm, authSessionToken)
         setDpdSettings({ ...settings, loaded: true })
         setDpdSettingsForm((current) => ({ ...current, password: '' }))
-        setDpdSettingsMessage('DPD-API-Zugangsdaten wurden verschlüsselt gespeichert. Eine Label-Erstellung ist noch nicht angebunden.')
+        setDpdSettingsMessage('DPD-API-Zugangsdaten wurden verschlüsselt gespeichert. DPD-Labels können jetzt beim Versand automatisch erzeugt werden.')
       } catch (error) {
         setDpdSettingsMessage(`DPD-Einstellungen konnten nicht gespeichert werden: ${error.message}`)
       } finally {
@@ -5723,9 +6187,10 @@ function App() {
           ...getShipmentDraft(salesDocument),
         }, authSessionToken)
         setSalesDocuments(result.salesDocuments)
-        setMdeMessage(result.emailSent
+        if (result.labelPdfBase64) await openLabelPdf(result.labelPdfBase64, `DPD-${result.parcelLabelNumber}.pdf`).catch(() => {})
+        setMdeMessage((result.parcelLabelNumber ? `DPD-Label ${result.parcelLabelNumber} erstellt. ` : '') + (result.emailSent
           ? `Auftrag ${salesDocument.number} wurde versendet. Die Kundin/der Kunde hat den Tracking-Link per E-Mail erhalten.`
-          : `Auftrag ${salesDocument.number} wurde versendet. Die Versand-E-Mail konnte nicht gesendet werden: ${result.emailError || 'Unbekannter Mailfehler'}`)
+          : `Auftrag ${salesDocument.number} wurde versendet. Die Versand-E-Mail konnte nicht gesendet werden: ${result.emailError || 'Unbekannter Mailfehler'}`))
       } catch (shipmentError) {
         setMdeMessage(`Versanddaten konnten nicht gespeichert werden: ${shipmentError.message}`)
       } finally {
@@ -5735,11 +6200,78 @@ function App() {
 
   const getShipmentTrackingUrl = (salesDocument) => {
       if (salesDocument.trackingUrl) return salesDocument.trackingUrl
-      if (salesDocument.carrier === 'DPD' && salesDocument.trackingNumber) {
-        return `https://tracking.dpd.de/status/de_DE/parcel/${encodeURIComponent(salesDocument.trackingNumber)}`
-      }
-      return ''
+      return carrierTrackingUrl(salesDocument.carrier, salesDocument.trackingNumber)
     }
+
+  const openDirectShipment = (salesDocument) => {
+    setDirectShipmentMessage({ id: '', text: '' })
+    setDirectShipment({
+      orderId: String(salesDocument.id),
+      carrier: 'DPD',
+      carrierName: '',
+      trackingNumber: '',
+      trackingUrl: '',
+      notifyCustomer: Boolean(salesDocument.recipientEmail),
+      labelMode: 'existing',
+      weightKg: getOrderWeightKg(salesDocument) || '',
+      dpdProduct: 'CL',
+    })
+  }
+
+  const submitDirectShipment = async (event, salesDocument) => {
+    event.preventDefault()
+    if (!window.zyroMde?.createDirectShipment) {
+      setDirectShipmentMessage({ id: String(salesDocument.id), text: 'Direktversand ist in dieser App-Version noch nicht verfügbar. Bitte App aktualisieren.' })
+      return
+    }
+    if (!window.confirm(`Auftrag ${salesDocument.number} jetzt als versendet buchen? Der Bestand wird abgebucht und die Rechnung erstellt.`)) return
+    setMdeBusy(true)
+    setDirectShipmentMessage({ id: String(salesDocument.id), text: '' })
+    try {
+      const result = await window.zyroMde.createDirectShipment(directShipment, authSessionToken)
+      if (Array.isArray(result.salesDocuments)) setSalesDocuments(result.salesDocuments)
+      if (Array.isArray(result.products)) setProducts(result.products)
+      if (Array.isArray(result.stockMovements)) setStockMovements(result.stockMovements)
+      if (result.labelPdfBase64) await openLabelPdf(result.labelPdfBase64, `DPD-${result.parcelLabelNumber}.pdf`).catch(() => {})
+      const parts = [`Auftrag ${salesDocument.number} wurde versendet.`]
+      if (result.parcelLabelNumber) parts.push(`DPD-Label ${result.parcelLabelNumber} erstellt.`)
+      if (result.invoiceNumber) parts.push(`Rechnung ${result.invoiceNumber} erstellt${result.invoiceEmailSent ? ' und per E-Mail gesendet' : ''}.`)
+      if (directShipment.notifyCustomer) parts.push(result.emailSent ? 'Der Kunde hat den Tracking-Link per E-Mail erhalten.' : `Versand-E-Mail fehlgeschlagen: ${result.emailError || 'Unbekannter Fehler'}`)
+      if (result.invoiceError) parts.push(`Hinweis Rechnung: ${result.invoiceError}`)
+      setDirectShipmentMessage({ id: String(salesDocument.id), text: parts.join(' ') })
+      setDirectShipment(null)
+    } catch (error) {
+      setDirectShipmentMessage({ id: String(salesDocument.id), text: `Sendung konnte nicht erstellt werden: ${error.message}` })
+    } finally {
+      setMdeBusy(false)
+    }
+  }
+
+  const createManualShipment = async (event) => {
+    event.preventDefault()
+    if (!window.zyroMde?.createManualShipment) {
+      setMdeMessage('Manuelle Sendungen sind in dieser App-Version noch nicht verfügbar. Bitte App aktualisieren.')
+      return
+    }
+    setMdeBusy(true)
+    setMdeMessage('')
+    try {
+      const result = await window.zyroMde.createManualShipment(manualShipmentForm, authSessionToken)
+      if (Array.isArray(result.salesDocuments)) setSalesDocuments(result.salesDocuments)
+      if (result.labelPdfBase64) await openLabelPdf(result.labelPdfBase64, `DPD-${result.parcelLabelNumber}.pdf`).catch(() => {})
+      setManualShipmentForm(initialManualShipmentForm)
+      setManualShipmentOpen(false)
+      setMdeMessage(!manualShipmentForm.notifyCustomer
+        ? `Sendung ${result.number} wurde angelegt.`
+        : result.emailSent
+          ? `Sendung ${result.number} wurde angelegt. Der Empfänger hat den Tracking-Link per E-Mail erhalten.`
+          : `Sendung ${result.number} wurde angelegt, aber die E-Mail konnte nicht gesendet werden: ${result.emailError || 'Unbekannter Mailfehler'}`)
+    } catch (error) {
+      setMdeMessage(`Sendung konnte nicht angelegt werden: ${error.message}`)
+    } finally {
+      setMdeBusy(false)
+    }
+  }
 
   const shipmentActions = {
     getTrackingUrl: getShipmentTrackingUrl,
@@ -5762,6 +6294,31 @@ function App() {
         : `Versand-E-Mail konnte nicht gesendet werden: ${result.emailError || 'Unbekannter Mailfehler'}`)
     } catch (mailError) {
       setMdeMessage(`Versand-E-Mail konnte nicht gesendet werden: ${mailError.message}`)
+    } finally {
+      setMdeBusy(false)
+    }
+  }
+
+  const refreshCarrierStatus = async (salesDocument) => {
+    if (!window.zyroMde?.getCarrierStatus) {
+      setMdeMessage('Die Sendungsverfolgung ist in dieser App-Version noch nicht verfügbar. Bitte App aktualisieren.')
+      return
+    }
+    setMdeBusy(true)
+    setMdeMessage('')
+    try {
+      const result = await window.zyroMde.getCarrierStatus(salesDocument.id, authSessionToken)
+      if (Array.isArray(result.salesDocuments)) setSalesDocuments(result.salesDocuments)
+      if (!result.status) {
+        setMdeMessage(`${salesDocument.number}: ${result.message || 'Noch kein Status vom Versanddienst.'}`)
+        return
+      }
+      const where = [result.status.location, result.status.timestamp ? new Date(result.status.timestamp).toLocaleString('de-DE') : ''].filter(Boolean).join(' · ')
+      setMdeMessage(`${salesDocument.number} (${salesDocument.carrier}): ${result.status.description || result.status.status}${where ? ` – ${where}` : ''}.${result.status.delivered
+        ? result.reviewEmailSent ? ' Zugestellt – Bewertungs-E-Mail wurde gesendet.' : result.reviewEmailError ? ` Zugestellt, Bewertungs-E-Mail fehlgeschlagen: ${result.reviewEmailError}` : ' Zugestellt.'
+        : ''}`)
+    } catch (error) {
+      setMdeMessage(`Status konnte nicht abgerufen werden: ${error.message}`)
     } finally {
       setMdeBusy(false)
     }
@@ -5836,6 +6393,7 @@ function App() {
     if (editingRecipeId === recipeId) {
       setEditingRecipeId(null)
       setRecipeForm(initialRecipeForm)
+      setRecipeItems([])
     }
   }
 
@@ -6386,57 +6944,9 @@ function App() {
     const categoryRows = financeReport.categories.map((item) => (
       `<tr><td>${item.type === 'income' ? 'Einnahme' : 'Ausgabe'}</td><td>${escapeHtml(item.category)}</td><td>${euro(item.netCents)}</td><td>${euro(item.grossCents)}</td></tr>`
     )).join('')
-    printWindow.document.write(`<!doctype html><html lang="de"><head><meta charset="utf-8"><title>Finanzübersicht ${escapeHtml(financeMonth)}</title><style>body{font:14px Arial,sans-serif;margin:32px;color:#17202a}h1{font-size:22px}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #ccd2d8;padding:8px;text-align:left}th{background:#f1f4f6}.note{padding:12px;background:#fff4d6}</style></head><body><h1>Finanzübersicht ${escapeHtml(financeMonth)}</h1><p class="note">Vereinfachte Vorschau auf Ist-Basis. Keine amtliche UStVA und keine zertifizierte BWA. Umsatzsteuererklärung bitte im Mein-ELSTER-Portal prüfen und einreichen.</p><h2>Monatsübersicht</h2><table><tbody><tr><th>Einnahmen netto</th><td>${euro(financeReport.incomeNetCents)}</td></tr><tr><th>Ausgaben netto</th><td>${euro(financeReport.expenseNetCents)}</td></tr><tr><th>Betriebsergebnis vereinfacht</th><td>${euro(financeReport.operatingResultCents)}</td></tr><tr><th>Umsatzsteuer auf Zahlungseingänge</th><td>${euro(financeReport.outputVatCents)}</td></tr><tr><th>Vorsteuer laut Belegen</th><td>${euro(financeReport.inputVatCents)}</td></tr><tr><th>UStVA-Vorschau (Zahllast / Erstattung)</th><td>${euro(financeReport.vatDueCents)}</td></tr></tbody></table><h2>Aufteilung nach Kategorie</h2><table><thead><tr><th>Art</th><th>Kategorie</th><th>Netto</th><th>Brutto</th></tr></thead><tbody>${categoryRows || '<tr><td colspan="4">Keine Buchungen im ausgewählten Zeitraum.</td></tr>'}</tbody></table><script>window.onload=()=>window.print()</script></body></html>`)
+    printWindow.document.write(`<!doctype html><html lang="de"><head><meta charset="utf-8"><title>Finanzübersicht ${escapeHtml(financeMonth)}</title><style>body{font:14px Arial,sans-serif;margin:32px;color:#17202a}h1{font-size:22px}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #ccd2d8;padding:8px;text-align:left}th{background:#f1f4f6}.note{padding:12px;background:#fff4d6}</style></head><body><h1>Finanzübersicht ${escapeHtml(financeMonth)}</h1><p class="note">Vereinfachte Vorschau auf Ist-Basis. Keine amtliche UStVA und keine zertifizierte BWA. Umsatzsteuervoranmeldung bitte über sevDesk bzw. das Steuerbüro einreichen.</p><h2>Monatsübersicht</h2><table><tbody><tr><th>Einnahmen netto</th><td>${euro(financeReport.incomeNetCents)}</td></tr><tr><th>Ausgaben netto</th><td>${euro(financeReport.expenseNetCents)}</td></tr><tr><th>Betriebsergebnis vereinfacht</th><td>${euro(financeReport.operatingResultCents)}</td></tr><tr><th>Umsatzsteuer auf Zahlungseingänge</th><td>${euro(financeReport.outputVatCents)}</td></tr><tr><th>Vorsteuer laut Belegen</th><td>${euro(financeReport.inputVatCents)}</td></tr><tr><th>UStVA-Vorschau (Zahllast / Erstattung)</th><td>${euro(financeReport.vatDueCents)}</td></tr></tbody></table><h2>Aufteilung nach Kategorie</h2><table><thead><tr><th>Art</th><th>Kategorie</th><th>Netto</th><th>Brutto</th></tr></thead><tbody>${categoryRows || '<tr><td colspan="4">Keine Buchungen im ausgewählten Zeitraum.</td></tr>'}</tbody></table><script>window.onload=()=>window.print()</script></body></html>`)
     printWindow.document.close()
     setFinanceMessage('Druckansicht geöffnet.')
-  }
-
-  const printElsterPreview = () => {
-    if (currentUser?.role !== 'admin') {
-      setFinanceMessage('Die ELSTER-Vorschau ist nur für Admins verfügbar.')
-      return
-    }
-    const printWindow = window.open('', '_blank')
-    if (!printWindow) {
-      setFinanceMessage('Druckansicht wurde vom Browser blockiert. Bitte Pop-ups für diese App erlauben.')
-      return
-    }
-    const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-    })[character])
-    const euro = (cents) => `${(cents / 100).toFixed(2).replace('.', ',')} €`
-    const period = `${elsterPreview.startMonth} bis ${elsterPreview.endMonth}`
-    const salesRows = elsterPreview.vatSales.map((item) => (
-      `<tr><td>${item.vatRate} %</td><td>${euro(item.netCents)}</td><td>${euro(item.vatCents)}</td></tr>`
-    )).join('')
-    printWindow.document.write(`<!doctype html><html lang="de"><head><meta charset="utf-8"><title>UStVA-Übermittlungsvorschau ${escapeHtml(period)}</title><style>body{font:14px Arial,sans-serif;margin:32px;color:#17202a}h1{font-size:22px}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #ccd2d8;padding:8px;text-align:left}th{background:#f1f4f6}.note{padding:12px;background:#fff4d6}</style></head><body><h1>UStVA-Übermittlungsvorschau</h1><p>Zeitraum: ${escapeHtml(period)}</p><p>Unternehmen: ${escapeHtml(elsterSetup.businessName || 'Nicht eingetragen')}<br>Steuernummer: ${escapeHtml(elsterSetup.taxNumber || 'Nicht eingetragen')}<br>Finanzamt: ${escapeHtml(elsterSetup.taxOffice || 'Nicht eingetragen')}<br>Bundesland: ${escapeHtml(elsterSetup.federalState || 'Nicht eingetragen')}</p><div class="note">Unverbindliche Vorschau aus den erfassten Finanzbuchungen. Dies ist kein amtlicher ELSTER-Datensatz und es wird nichts übermittelt. Werte und Belege bitte prüfen und anschließend manuell in Mein ELSTER eintragen.</div><h2>Umsätze und Umsatzsteuer</h2><table><thead><tr><th>Steuersatz</th><th>Bemessungsgrundlage netto</th><th>Umsatzsteuer</th></tr></thead><tbody>${salesRows}</tbody></table><h2>Voraussichtliche Zusammenfassung</h2><table><tbody><tr><th>Umsatzsteuer</th><td>${euro(elsterPreview.outputVatCents)}</td></tr><tr><th>Abziehbare Vorsteuer laut Belegen</th><td>${euro(elsterPreview.inputVatCents)}</td></tr><tr><th>Voraussichtliche Zahllast / Erstattung</th><td>${euro(elsterPreview.vatDueCents)}</td></tr></tbody></table><script>window.onload=()=>window.print()</script></body></html>`)
-    printWindow.document.close()
-    setFinanceMessage('ELSTER-Vorschau zur Kontrolle und zum Drucken geöffnet. Es wurde nichts übermittelt.')
-  }
-
-  const saveElsterSetup = async (event) => {
-    event.preventDefault()
-    if (!window.zyroData || currentUser?.role !== 'admin') {
-      setElsterSetupMessage('ELSTER-Einstellungen dürfen nur von einem Admin gespeichert werden.')
-      return
-    }
-    setElsterSetupSaving(true)
-    setElsterSetupMessage('')
-    try {
-      const savedSetup = { ...initialElsterSetup, ...elsterSetup }
-      const result = await window.zyroData.set('zyro-elster-setup', [elsterSetupEntry(savedSetup)], authSessionToken)
-      if (result?.success === false) throw new Error(result.message || 'Speichern fehlgeschlagen.')
-      setElsterSetup(savedSetup)
-      setElsterSetupMessage(networkStatus.mode === 'client'
-        ? 'ELSTER-Vorbereitungsdaten auf dem Haupt-PC gespeichert. Der Haupt-PC synchronisiert sie mit der Cloud.'
-        : networkStatus.cloudEnabled
-          ? 'ELSTER-Vorbereitungsdaten gespeichert und werden mit der Cloud synchronisiert.'
-          : 'ELSTER-Vorbereitungsdaten lokal gespeichert. Aktiviere den Cloud-Sync unter Netzwerk einrichten.')
-    } catch (error) {
-      setElsterSetupMessage(`Speichern fehlgeschlagen: ${error.message}`)
-    } finally {
-      setElsterSetupSaving(false)
-    }
   }
 
   const moderateProductReview = async (review, decision) => {
@@ -7511,6 +8021,7 @@ function App() {
               {tab === 'finanzen' && 'Finanzen'}
               {tab === 'zahlungen' && 'Zahlungen'}
               {tab === 'kalkulation' && 'Kalkulation'}
+              {tab === 'lohnherstellung' && 'Lohnherstellung'}
               {tab === 'newsletter' && 'Newsletter'}
               {tab === 'shop' && 'Shop'}
               {tab === 'lager' && 'Lager'}
@@ -8636,6 +9147,22 @@ function App() {
           </>
         )}
 
+        {activeTab === 'lohnherstellung' && currentUser?.role === 'admin' && (
+          <Suspense fallback={<p className="meta">Lohnherstellung wird geladen …</p>}>
+            <ContractManufacturing
+              jobs={contractJobs}
+              setJobs={setContractJobs}
+              recipes={recipes}
+              rawMaterials={rawMaterials}
+              customers={customers}
+              companyDetails={invoiceCompanyDetails}
+              currentUserName={currentUser?.name || ''}
+              showPrintPreview={showPrintPreview}
+              escapeHtml={escapeHtml}
+            />
+          </Suspense>
+        )}
+
         {activeTab === 'kalkulation' && currentUser?.role === 'admin' && (
           <section className="finance-workspace production-calculation-workspace">
             <div className="panel">
@@ -8859,7 +9386,7 @@ function App() {
                 </div>
               </div>
               <div className="finance-notice" role="note">
-                Die Monatsauswertung ist eine vereinfachte Vorbereitung, keine amtliche Umsatzsteuervoranmeldung und keine zertifizierte BWA. Die DATEV-Übergabe ist eine CSV-Arbeitshilfe, kein ungeprüft importierbarer DATEV-Buchungsstapel. Bitte Kontierung, Steuerbehandlung und Import mit dem Steuerbüro abstimmen; die Voranmeldung weiterhin manuell in Mein ELSTER einreichen.
+                Die Monatsauswertung ist eine vereinfachte Vorbereitung, keine amtliche Umsatzsteuervoranmeldung und keine zertifizierte BWA. Die DATEV-Übergabe ist eine CSV-Arbeitshilfe, kein ungeprüft importierbarer DATEV-Buchungsstapel. Bitte Kontierung, Steuerbehandlung und Import mit dem Steuerbüro abstimmen; die Umsatzsteuervoranmeldung über sevDesk bzw. das Steuerbüro einreichen.
               </div>
               <form className="form-grid finance-entry-form" onSubmit={saveFinanceEntry}>
                 <label>
@@ -8957,71 +9484,7 @@ function App() {
               </form>
             </div>
 
-            {currentUser?.role === 'admin' && (
-              <div className="panel">
-                <div className="panel-header">
-                  <div>
-                    <h2>ELSTER / ERiC vorbereiten</h2>
-                    <p className="meta">Steuer- und Herstellerangaben für eine mögliche spätere Anbindung</p>
-                  </div>
-                  <span>{elsterSetup.developerStatus === 'approved' ? 'Hersteller freigeschaltet' : 'Noch nicht verbunden'}</span>
-                </div>
-                <div className="finance-notice" role="note">
-                  Die Herstellerregistrierung und Freigabe durch ELSTER sind Voraussetzung für ERiC. ELSTER Secure ist hier als gewünschte Login-Methode vorgemerkt, aber eine ERiC-Unterstützung ist noch nicht bestätigt. Es erfolgt keine Übermittlung an ELSTER. Bitte keine Passwörter, Zertifikatsdateien oder privaten Schlüssel eintragen.
-                </div>
-                <form className="form-grid finance-entry-form" onSubmit={saveElsterSetup}>
-                    <label>
-                      Firmenname / steuerpflichtiger Name
-                      <input type="text" maxLength="160" value={elsterSetup.businessName} onChange={(event) => setElsterSetup((current) => ({ ...current, businessName: event.target.value }))} />
-                    </label>
-                    <label>
-                      Steuernummer
-                      <input type="text" maxLength="40" autoComplete="off" value={elsterSetup.taxNumber} onChange={(event) => setElsterSetup((current) => ({ ...current, taxNumber: event.target.value }))} />
-                    </label>
-                    <label>
-                      Zuständiges Finanzamt
-                      <input type="text" maxLength="120" value={elsterSetup.taxOffice} onChange={(event) => setElsterSetup((current) => ({ ...current, taxOffice: event.target.value }))} />
-                    </label>
-                    <label>
-                      Bundesland
-                      <select value={elsterSetup.federalState} onChange={(event) => setElsterSetup((current) => ({ ...current, federalState: event.target.value }))}>
-                        <option value="">Bitte auswählen</option>
-                        {['Baden-Württemberg', 'Bayern', 'Berlin', 'Brandenburg', 'Bremen', 'Hamburg', 'Hessen', 'Mecklenburg-Vorpommern', 'Niedersachsen', 'Nordrhein-Westfalen', 'Rheinland-Pfalz', 'Saarland', 'Sachsen', 'Sachsen-Anhalt', 'Schleswig-Holstein', 'Thüringen'].map((state) => (
-                          <option key={state} value={state}>{state}</option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      UStVA-Zeitraum laut Finanzamt
-                      <select value={elsterSetup.filingPeriod} onChange={(event) => setElsterSetup((current) => ({ ...current, filingPeriod: event.target.value }))}>
-                        <option value="monthly">Monatlich</option>
-                        <option value="quarterly">Vierteljährlich</option>
-                      </select>
-                    </label>
-                    <label>
-                      ELSTER-Herstellerregistrierung
-                      <select value={elsterSetup.developerStatus} onChange={(event) => setElsterSetup((current) => ({ ...current, developerStatus: event.target.value }))}>
-                        <option value="not-started">Noch nicht beantragt</option>
-                        <option value="applied">Beantragt / in Prüfung</option>
-                        <option value="approved">Freigeschaltet</option>
-                      </select>
-                    </label>
-                    <label>
-                      Hersteller-ID (falls zugeteilt)
-                      <input type="text" maxLength="80" autoComplete="off" value={elsterSetup.manufacturerId} onChange={(event) => setElsterSetup((current) => ({ ...current, manufacturerId: event.target.value }))} />
-                    </label>
-                    <label>
-                      ERiC-Version (falls bekannt)
-                      <input type="text" maxLength="40" value={elsterSetup.ericVersion} onChange={(event) => setElsterSetup((current) => ({ ...current, ericVersion: event.target.value }))} placeholder="Noch nicht eingerichtet" />
-                    </label>
-                    <div className="finance-form-actions">
-                      <button type="submit" className="primary-button" disabled={elsterSetupSaving}>{elsterSetupSaving ? 'Speichert …' : 'Vorbereitung speichern'}</button>
-                    </div>
-                    {elsterSetupMessage && <p className="form-feedback full-width" role="status">{elsterSetupMessage}</p>}
-                    <p className="meta full-width">Die Angaben einschließlich Steuernummer werden mit der Cloud synchronisiert und sind in der App nur für Admins abrufbar. Sie sind nicht Ende-zu-Ende-verschlüsselt. Keine Passwörter, Zertifikate oder privaten Schlüssel eintragen. Eine tatsächliche ELSTER-Übermittlung ist noch nicht verfügbar.</p>
-                </form>
-              </div>
-            )}
+            {currentUser?.role === 'admin' && window.zyroSevdesk?.overview && <SevdeskPanel sessionToken={authSessionToken} />}
 
             <div className="panel">
               <div className="panel-header">
@@ -9034,7 +9497,6 @@ function App() {
                   Auswertungsmonat
                   <input type="month" value={financeMonth} onChange={(event) => setFinanceMonth(event.target.value)} />
                 </label>
-                {currentUser?.role === 'admin' && <button type="button" className="secondary-button small" onClick={() => setShowElsterPreview((visible) => !visible)}>{showElsterPreview ? 'ELSTER-Vorschau schließen' : 'ELSTER-Vorschau'}</button>}
               </div>
               </div>
               <div className="finance-summary-grid">
@@ -9045,7 +9507,7 @@ function App() {
                 <div><span>Vorsteuer laut Belegen</span><strong>{formatFinanceEuro(financeReport.inputVatCents)}</strong></div>
                 <div><span>UStVA-Vorschau · Zahllast / Erstattung</span><strong>{formatFinanceEuro(financeReport.vatDueCents)}</strong></div>
               </div>
-              <section className="elster-preview" aria-labelledby="issued-invoices-title">
+              <section className="finance-subpanel" aria-labelledby="issued-invoices-title">
                 <div className="panel-header">
                   <div>
                     <h3 id="issued-invoices-title">Ausgestellte Rechnungen im Monat</h3>
@@ -9080,45 +9542,6 @@ function App() {
                   </table>
                 </div>
               </section>
-              {showElsterPreview && currentUser?.role === 'admin' && (
-                <section className="elster-preview" aria-labelledby="elster-preview-title">
-                  <div className="panel-header">
-                    <div>
-                      <h3 id="elster-preview-title">ELSTER-UStVA-Übermittlungsvorschau</h3>
-                      <p className="meta">
-                        {elsterPreview.filingPeriod === 'quarterly' ? 'Vierteljahr' : 'Monat'}: {elsterPreview.startMonth} bis {elsterPreview.endMonth}
-                      </p>
-                    </div>
-                    <button type="button" className="secondary-button small" onClick={printElsterPreview}>Vorschau drucken / PDF</button>
-                  </div>
-                  <div className="finance-notice" role="note">
-                    Dies ist eine unverbindliche Vorschau aus den eingetragenen Buchungen, kein amtlicher ELSTER-Datensatz. Es wird nichts übermittelt. Bitte Belege und Werte prüfen und die Angaben anschließend manuell in Mein ELSTER übertragen.
-                  </div>
-                  <dl className="elster-preview-details">
-                    <div><dt>Unternehmen</dt><dd>{elsterSetup.businessName || 'Nicht eingetragen'}</dd></div>
-                    <div><dt>Steuernummer</dt><dd>{elsterSetup.taxNumber || 'Nicht eingetragen'}</dd></div>
-                    <div><dt>Finanzamt</dt><dd>{elsterSetup.taxOffice || 'Nicht eingetragen'}</dd></div>
-                    <div><dt>Bundesland</dt><dd>{elsterSetup.federalState || 'Nicht eingetragen'}</dd></div>
-                  </dl>
-                  <div className="table-scroll">
-                    <table className="data-table">
-                      <thead><tr><th>Umsätze nach Steuersatz</th><th>Bemessungsgrundlage netto</th><th>Umsatzsteuer</th></tr></thead>
-                      <tbody>
-                        {elsterPreview.vatSales.map((item) => (
-                          <tr key={item.vatRate}>
-                            <td>{item.vatRate} %</td>
-                            <td>{formatFinanceEuro(item.netCents)}</td>
-                            <td>{formatFinanceEuro(item.vatCents)}</td>
-                          </tr>
-                        ))}
-                        <tr><th>Umsatzsteuer gesamt</th><td></td><th>{formatFinanceEuro(elsterPreview.outputVatCents)}</th></tr>
-                        <tr><td>Abziehbare Vorsteuer laut Belegen</td><td></td><td>{formatFinanceEuro(elsterPreview.inputVatCents)}</td></tr>
-                        <tr><th>Voraussichtliche Zahllast / Erstattung</th><td></td><th>{formatFinanceEuro(elsterPreview.vatDueCents)}</th></tr>
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
-              )}
               <div className="table-scroll">
                 <table className="data-table">
                   <thead><tr><th>Art</th><th>Kategorie</th><th>Netto</th><th>Brutto</th></tr></thead>
@@ -9621,10 +10044,12 @@ function App() {
                     <small>Bis zu 5 Bilder pro Produkt. Das erste Bild wird als Hauptbild im Shop verwendet.</small>
                   </div>
                   <label style={{ flexDirection: 'row', alignItems: 'center', gap: 8, display: 'flex' }}><input type="checkbox" checked={productForm.shopActive} onChange={(event) => setProductForm((current) => ({ ...current, shopActive: event.target.checked }))} /> Im Shop anzeigen</label>
+                  <label style={{ flexDirection: 'row', alignItems: 'center', gap: 8, display: 'flex' }}><input type="checkbox" checked={productForm.shopTrayOnly} onChange={(event) => setProductForm((current) => ({ ...current, shopTrayOnly: event.target.checked }))} /> Nur als ganzes 24er-Tray verkaufen (z. B. Mix-Tray)</label>
                   <label style={{ flexDirection: 'row', alignItems: 'center', gap: 8, display: 'flex' }}><input type="checkbox" checked={productForm.shopPreorderEnabled} onChange={(event) => setProductForm((current) => ({ ...current, shopPreorderEnabled: event.target.checked }))} /> Vorbestellung erlauben, wenn Lagerbestand 0 ist</label>
                   <label>Voraussichtliches Lieferdatum<input type="date" value={productForm.shopExpectedDeliveryDate} onChange={(event) => setProductForm((current) => ({ ...current, shopExpectedDeliveryDate: event.target.value }))} disabled={!productForm.shopPreorderEnabled} required={productForm.shopPreorderEnabled} /></label>
                   <small style={{ gridColumn: '1 / -1' }}>Bei Bestand 0 ist der Artikel nur mit aktivierter Vorbestellung bestellbar. Die normale Zahlung im Checkout bleibt unverändert.</small>
                   <label>Preis pro 24er-Tray, brutto (€)<input type="text" inputMode="decimal" name="shopCratePrice" value={productForm.shopCratePrice} onChange={handleProductInput} placeholder="z. B. 28,56" /></label>
+                  <small style={{ gridColumn: '1 / -1' }}>Versandkosten werden nicht mehr am Produkt eingestellt: Im Shop gelten die Versandkosten aus den Shop-Einstellungen, in Belegen steht der Versand als eigene Position (Artikel mit Kategorie „Versand“).</small>
                   <label>Shop-Beschreibung<textarea name="shopDescription" rows="6" maxLength="1500" value={productForm.shopDescription} onChange={handleProductInput} placeholder="Geschmack, Zutaten, Besonderheiten – Absätze mit Enter" /></label>
                   <label>Zutaten<textarea name="shopIngredients" rows="3" maxLength="600" value={productForm.shopIngredients} onChange={handleProductInput} placeholder="Wasser, Zucker, Maracuja-Saft ..." /></label>
                   <div className="product-nutrition-editor">
@@ -9648,6 +10073,9 @@ function App() {
                     <option value="Zero">Zero</option>
                     <option value="Classic">Classic</option>
                     <option value="Limonade">Limonade</option>
+                    <option value="Mix-Tray">Mix-Tray</option>
+                    <option value="Vorteilspack">Vorteilspack</option>
+                    <option value="Versand">Versand (Versandkosten-Artikel)</option>
                   </select>
                 </label>
                 <label>
@@ -9799,7 +10227,162 @@ function App() {
         )}
 
         {activeTab === 'rezepturen' && (
-          <section className="two-column">
+          <nav className="recipe-view-switch" aria-label="Rezeptursystem">
+            <button type="button" className={recipeView === 'rezepturen' ? 'active' : ''} onClick={() => setRecipeView('rezepturen')}>
+              Rezepturen <span>{recipes.length}</span>
+            </button>
+            <button type="button" className={recipeView === 'rohstoffe' ? 'active' : ''} onClick={() => setRecipeView('rohstoffe')}>
+              Rohstoff-Datenbank <span>{rawMaterials.length}</span>
+            </button>
+          </nav>
+        )}
+
+        {activeTab === 'rezepturen' && recipeView === 'rohstoffe' && (
+          <section className="raw-material-layout">
+            <div className="panel">
+              <div className="panel-header">
+                <h2>{editingRawMaterialId === null ? 'Rohstoff anlegen' : 'Rohstoff bearbeiten'}</h2>
+                <span>Stammdaten</span>
+              </div>
+              <form className="form-grid" onSubmit={saveRawMaterial}>
+                <label className="full-width">
+                  Name *
+                  <input value={rawMaterialForm.name} onChange={(event) => setRawMaterialForm((current) => ({ ...current, name: event.target.value }))} placeholder="z. B. Zitronensaftkonzentrat 65 °Brix" autoFocus />
+                </label>
+                <label>
+                  E-Nummer
+                  <input value={rawMaterialForm.eNumber} onChange={(event) => setRawMaterialForm((current) => ({ ...current, eNumber: event.target.value }))} placeholder="z. B. E 330" />
+                </label>
+                <label>
+                  Funktionsklasse
+                  <input value={rawMaterialForm.additiveClass} onChange={(event) => setRawMaterialForm((current) => ({ ...current, additiveClass: event.target.value }))} placeholder="z. B. Säuerungsmittel" list="raw-material-classes" />
+                  <datalist id="raw-material-classes">
+                    {catalogAdditiveClasses.map((name) => <option key={name} value={name} />)}
+                  </datalist>
+                </label>
+                <label>
+                  Artikelnummer
+                  <input value={rawMaterialForm.articleNumber} onChange={(event) => setRawMaterialForm((current) => ({ ...current, articleNumber: event.target.value }))} placeholder="z. B. ZK-650" />
+                </label>
+                <label>
+                  Kategorie
+                  <select value={rawMaterialForm.category} onChange={(event) => setRawMaterialForm((current) => ({ ...current, category: event.target.value }))}>
+                    {rawMaterialCategories.map((category) => <option key={category} value={category}>{category}</option>)}
+                  </select>
+                </label>
+                <label className="full-width">
+                  Lieferant
+                  <input value={rawMaterialForm.supplier} onChange={(event) => setRawMaterialForm((current) => ({ ...current, supplier: event.target.value }))} placeholder="z. B. Döhler" list="raw-material-suppliers" />
+                  <datalist id="raw-material-suppliers">
+                    {[...new Set([...suppliers.map((supplier) => supplier.name), ...rawMaterials.map((entry) => entry.supplier)].filter(Boolean))].map((name) => <option key={name} value={name} />)}
+                  </datalist>
+                </label>
+                <label>
+                  Einkaufseinheit
+                  <select value={rawMaterialForm.unit} onChange={(event) => setRawMaterialForm((current) => ({ ...current, unit: event.target.value }))}>
+                    {rawMaterialUnits.map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+                  </select>
+                </label>
+                <label>
+                  Preis je {rawMaterialForm.unit} (€ netto)
+                  <input type="text" inputMode="decimal" value={rawMaterialForm.pricePerUnit} onChange={(event) => setRawMaterialForm((current) => ({ ...current, pricePerUnit: event.target.value }))} placeholder="z. B. 4,20" />
+                </label>
+                <label className="full-width">
+                  Allergene / Kennzeichnung
+                  <input value={rawMaterialForm.allergens} onChange={(event) => setRawMaterialForm((current) => ({ ...current, allergens: event.target.value }))} placeholder="z. B. keine · vegan · E330" />
+                </label>
+                <label className="full-width">
+                  Notiz
+                  <textarea value={rawMaterialForm.notes} onChange={(event) => setRawMaterialForm((current) => ({ ...current, notes: event.target.value }))} placeholder="Lagerung, Dichte, Spezifikation …" />
+                </label>
+                <button type="submit" className="primary-button full-width-button">{editingRawMaterialId === null ? 'Rohstoff anlegen' : 'Änderungen speichern'}</button>
+                {editingRawMaterialId !== null && (
+                  <button type="button" className="secondary-button full-width-button" onClick={resetRawMaterialForm}>Abbrechen</button>
+                )}
+                {rawMaterialMessage && <p className="recipe-form-message full-width" role="status">{rawMaterialMessage}</p>}
+              </form>
+            </div>
+
+            <div className="panel">
+              <div className="panel-header">
+                <h2>Rohstoffe</h2>
+                <span>{filteredRawMaterials.length} von {rawMaterials.length}</span>
+                <button type="button" className="secondary-button small" onClick={importRawMaterialsFromExisting}>Aus Lager &amp; Rezepturen übernehmen</button>
+                <button type="button" className="secondary-button small" onClick={() => applyReferencePrices()} title="Nur Rohstoffe ohne Preis – eigene Preise bleiben unverändert">Fehlende Preise mit Richtpreisen füllen</button>
+              </div>
+              <input className="raw-material-filter" type="search" value={rawMaterialFilter} onChange={(event) => setRawMaterialFilter(event.target.value)} placeholder="Suchen nach Name, E-Nummer, Artikelnummer, Lieferant, Kategorie …" />
+              {rawMaterials.length === 0 ? (
+                <p className="meta">Noch keine Rohstoffe. Links anlegen oder bestehende Lagerartikel und Rezeptur-Zutaten übernehmen.</p>
+              ) : (
+                <div className="table-wrap">
+                  <table className="raw-material-table">
+                    <thead><tr><th>Rohstoff</th><th>E-Nr.</th><th>Kategorie</th><th>Lieferant</th><th>Preis</th><th>Verwendet in</th><th /></tr></thead>
+                    <tbody>
+                      {filteredRawMaterials.map((entry) => {
+                        const usedIn = rawMaterialUsage(entry)
+                        const price = parseAmount(entry.pricePerUnit)
+                        return (
+                          <tr key={entry.id} className={String(editingRawMaterialId) === String(entry.id) ? 'editing' : ''}>
+                            <td><strong>{entry.name}</strong>{(entry.articleNumber || entry.allergens) && <small className="table-subtext">{[entry.articleNumber, entry.allergens].filter(Boolean).join(' · ')}</small>}</td>
+                            <td className="e-number-cell">{entry.eNumber || '–'}</td>
+                            <td>{entry.category || '–'}{entry.additiveClass && entry.additiveClass !== entry.category && <small className="table-subtext">{entry.additiveClass}</small>}</td>
+                            <td>{entry.supplier || '–'}</td>
+                            <td>{Number.isFinite(price) ? <>{`${price.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 6 })} / ${entry.unit}`}{entry.priceSource === 'Richtwert' && <small className="table-subtext" title="Richtpreis aus dem Katalog – durch Lieferantenpreis ersetzen">Richtwert {referencePriceDate}</small>}</> : <span className="missing-value">fehlt</span>}</td>
+                            <td>{usedIn.length ? usedIn.join(', ') : '–'}</td>
+                            <td className="row-actions">
+                              <button type="button" className="secondary-button small" onClick={() => editRawMaterial(entry)}>Bearbeiten</button>
+                              {currentUser?.role === 'admin' && networkStatus.mode !== 'client' && (
+                                <button type="button" className="danger-button small" onClick={() => removeRawMaterial(entry)}>Löschen</button>
+                              )}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="panel raw-material-catalog">
+              <div className="panel-header">
+                <div>
+                  <h2>Katalog: E-Nummern &amp; Grundstoffe</h2>
+                  <p className="meta">{catalogSource}. Verwendungsbedingungen und Höchstmengen je Getränk bitte fachlich prüfen.</p>
+                </div>
+                <span>{catalogResults.length} verfügbar</span>
+              </div>
+              <div className="catalog-toolbar">
+                <input type="search" value={catalogQuery} onChange={(event) => setCatalogQuery(event.target.value)} placeholder="Katalog durchsuchen, z. B. E 330, Citronensäure, Süßungsmittel …" />
+                <select value={catalogClass} onChange={(event) => setCatalogClass(event.target.value)} aria-label="Funktionsklasse filtern">
+                  <option value="">Alle Klassen</option>
+                  <option value="__base__">Getränke-Grundstoffe (ohne E-Nr.)</option>
+                  {catalogAdditiveClasses.map((name) => <option key={name} value={name}>{name}</option>)}
+                </select>
+                <button type="button" className="primary-button" onClick={() => importAllCatalogEntries(catalogResults)} disabled={!catalogResults.length}>
+                  {catalogQuery.trim() || catalogClass ? `Treffer übernehmen (${catalogResults.length})` : `Alle übernehmen (${catalogResults.length})`}
+                </button>
+              </div>
+              {catalogResults.length === 0 ? (
+                <p className="meta">Alle passenden Katalog-Rohstoffe sind bereits in deiner Rohstoff-Datenbank.</p>
+              ) : (
+                <div className="catalog-list">
+                  {catalogResults.slice(0, 120).map((entry) => (
+                    <div className="catalog-item" key={entry.catalogId}>
+                      <span className="e-badge">{entry.eNumber || 'Basis'}</span>
+                      <div><strong>{entry.name}</strong><small>{[entry.additiveClass || entry.category, entry.aliases?.length ? `auch: ${entry.aliases.slice(0, 2).join(', ')}` : ''].filter(Boolean).join(' · ')}</small></div>
+                      <button type="button" className="secondary-button small" onClick={() => importCatalogEntry(entry)}>Übernehmen</button>
+                    </div>
+                  ))}
+                  {catalogResults.length > 120 && <p className="meta">… und {catalogResults.length - 120} weitere. Suche oder Klasse eingrenzen.</p>}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        {activeTab === 'rezepturen' && recipeView === 'rezepturen' && (
+          <section className="two-column recipe-layout">
             <div className="panel">
               <div className="panel-header">
                 <h2>{editingRecipeId === null ? 'Rezeptur hinzufügen' : 'Rezeptur bearbeiten'}</h2>
@@ -9860,20 +10443,191 @@ function App() {
                     <option value="Zero">Zero</option>
                     <option value="Classic">Classic</option>
                     <option value="Limonade">Limonade</option>
+                    <option value="Mix-Tray">Mix-Tray</option>
+                    <option value="Vorteilspack">Vorteilspack</option>
+                    <option value="Versand">Versand (Versandkosten-Artikel)</option>
+                  </select>
+                </label>
+                <label>
+                  Rezepturart
+                  <select name="kind" value={recipeForm.kind || 'Fertiges Getränk'} onChange={handleRecipeInput}>
+                    {recipeKinds.map((kind) => <option key={kind} value={kind}>{kind === 'Konzentrat' ? 'Konzentrat / Sirup (wird verdünnt)' : 'Fertiges Getränk (trinkfertig)'}</option>)}
                   </select>
                 </label>
                 <label>
                   Batchgröße
-                  <input type="text" name="batchSize" value={recipeForm.batchSize} onChange={handleRecipeInput} placeholder="10.000ml" />
+                  <span className="batch-size-input">
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={splitBatchSize(recipeForm.batchSize).amount}
+                      onChange={(event) => setRecipeForm((current) => ({ ...current, batchSize: joinBatchSize(event.target.value.replace(/[^\d.,]/g, ''), splitBatchSize(current.batchSize).unit) }))}
+                      placeholder={splitBatchSize(recipeForm.batchSize).unit === 'l' ? '10' : '10.000'}
+                      aria-label="Batchgröße Menge"
+                    />
+                    <select
+                      value={splitBatchSize(recipeForm.batchSize).unit}
+                      onChange={(event) => setRecipeForm((current) => ({ ...current, batchSize: joinBatchSize(splitBatchSize(current.batchSize).amount, event.target.value) }))}
+                      aria-label="Batchgröße Einheit"
+                    >
+                      <option value="ml">ml</option>
+                      <option value="l">Liter</option>
+                    </select>
+                  </span>
                 </label>
+                {recipeForm.kind === 'Konzentrat' && (
+                  <label>
+                    Mischverhältnis (1 Teil Konzentrat + … Teile Wasser)
+                    <input type="text" inputMode="decimal" name="dilution" value={recipeForm.dilution || ''} onChange={handleRecipeInput} placeholder="z. B. 4 (= 1 + 4)" />
+                  </label>
+                )}
                 <label className="full-width">
                   Beschreibung
                   <textarea name="description" value={recipeForm.description} onChange={handleRecipeInput} placeholder="Geschmack, Merkmale, Zielgruppe..." />
                 </label>
-                <label className="full-width">
-                  Zutaten
-                  <textarea name="ingredients" value={recipeForm.ingredients} onChange={handleRecipeInput} placeholder={'Wasser: 6.000ml\nZitronensaft: 1.600ml\nSüßungsmittel: 300g'} />
-                </label>
+                <div className="recipe-editor full-width">
+                  <div className="recipe-editor-head">
+                    <strong>Rohstoffe &amp; Mengen</strong>
+                    <span className="meta">{recipeItems.length} Positionen</span>
+                  </div>
+                  <div className="recipe-material-search">
+                    <input
+                      type="search"
+                      value={recipeMaterialSearch}
+                      onChange={(event) => setRecipeMaterialSearch(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key !== 'Enter') return
+                        event.preventDefault()
+                        if (recipeMaterialResults[0]) addRecipeItem(recipeMaterialResults[0])
+                        else if (recipeCatalogResults[0]) addCatalogEntryToRecipe(recipeCatalogResults[0])
+                        else addRecipeItemFromSearch(true)
+                      }}
+                      placeholder={rawMaterials.length ? 'Rohstoff suchen (Name, Art.-Nr., Lieferant) und Enter drücken …' : 'Rohstoff eingeben – wird in der Rohstoff-Datenbank angelegt …'}
+                      aria-label="Rohstoff suchen"
+                    />
+                    {recipeMaterialSearch.trim() && (
+                      <div className="recipe-material-results" role="listbox">
+                        {recipeMaterialResults.map((entry) => {
+                          const price = parseAmount(entry.pricePerUnit)
+                          return (
+                            <button type="button" role="option" aria-selected="false" key={entry.id} onClick={() => addRecipeItem(entry)}>
+                              <strong>{entry.eNumber && <span className="e-badge">{entry.eNumber}</span>}{entry.name}</strong>
+                              <span>{[matchedAlias(entry, recipeMaterialSearch) && `= ${matchedAlias(entry, recipeMaterialSearch)}`, entry.articleNumber, entry.category, entry.supplier, Number.isFinite(price) ? `${price.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 4 })}/${entry.unit}` : ''].filter(Boolean).join(' · ')}</span>
+                            </button>
+                          )
+                        })}
+                        {recipeCatalogResults.length > 0 && <div className="results-divider">Aus dem Katalog (E-Nummern &amp; Grundstoffe)</div>}
+                        {recipeCatalogResults.map((entry) => (
+                          <button type="button" role="option" aria-selected="false" key={entry.catalogId} onClick={() => addCatalogEntryToRecipe(entry)}>
+                            <strong>{entry.eNumber && <span className="e-badge">{entry.eNumber}</span>}{entry.name}</strong>
+                            <span>{matchedAlias(entry, recipeMaterialSearch) && `= ${matchedAlias(entry, recipeMaterialSearch)} · `}{entry.additiveClass || entry.category} · wird in die Rohstoff-Datenbank übernommen</span>
+                          </button>
+                        ))}
+                        {!recipeMaterialResults.some((entry) => String(entry.name || '').trim().toLowerCase() === recipeMaterialSearch.trim().toLowerCase())
+                          && !recipeCatalogResults.some((entry) => entry.name.toLowerCase() === recipeMaterialSearch.trim().toLowerCase()) && (
+                          <button type="button" className="create-option" onClick={() => addRecipeItemFromSearch(true)}>
+                            + „{recipeMaterialSearch.trim()}“ als neuen Rohstoff anlegen und hinzufügen
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {recipeItems.length === 0 ? (
+                    <p className="recipe-editor-empty">Noch keine Rohstoffe. Oben suchen und auswählen – Menge, Einheit und Hinweis dann direkt in der Zeile eintragen.</p>
+                  ) : (
+                    <div className="table-wrap">
+                      <table className="recipe-items-table">
+                        <thead>
+                          <tr><th>#</th><th>Rohstoff</th><th>Menge</th><th>Einheit</th><th className="num">Anteil</th><th className="num">Kosten</th><th>Hinweis / Zugabe</th><th /></tr>
+                        </thead>
+                        <tbody>
+                          {recipeCalculation.rows.map((row, index) => (
+                            <tr key={row.id}>
+                              <td className="position">{index + 1}</td>
+                              <td>
+                                <strong>{row.name || 'Ohne Namen'}</strong>
+                                <small className="table-subtext">{row.rawMaterial ? [row.rawMaterial.eNumber, row.rawMaterial.articleNumber, row.rawMaterial.supplier].filter(Boolean).join(' · ') || 'Rohstoff-Datenbank' : 'Nicht in der Rohstoff-Datenbank'}</small>
+                              </td>
+                              <td>
+                                {row.fillUp ? (
+                                  <input className="amount-input fill-up" type="text" readOnly value={row.resolvedAmount === null ? '' : row.resolvedAmount.toLocaleString('de-DE', { maximumFractionDigits: 3 })} placeholder="?" title="Wird automatisch auf die Batchgröße aufgefüllt" aria-label={`Menge ${row.name} (automatisch aufgefüllt)`} />
+                                ) : (
+                                  <input className="amount-input" type="text" inputMode="decimal" value={row.amount} onChange={(event) => updateRecipeItem(row.id, 'amount', event.target.value)} placeholder="0" aria-label={`Menge ${row.name}`} />
+                                )}
+                                {(row.fillUp || row.rawMaterial?.category === 'Wasser' || ['ml', 'l'].includes(row.unit)) && (
+                                  <label className="fill-up-toggle" title="Menge = Batchgröße minus alle anderen Zutaten">
+                                    <input type="checkbox" checked={row.fillUp} onChange={() => toggleRecipeFillUp(row.id)} />
+                                    auffüllen (ad)
+                                  </label>
+                                )}
+                              </td>
+                              <td>
+                                <select value={row.unit} onChange={(event) => updateRecipeItem(row.id, 'unit', event.target.value)} aria-label={`Einheit ${row.name}`}>
+                                  {[...new Set([...rawMaterialUnits, row.unit].filter(Boolean))].map((unit) => <option key={unit} value={unit}>{unit}</option>)}
+                                </select>
+                              </td>
+                              <td className="num">
+                                {row.share === null ? '–' : (
+                                  <span className="share-cell"><span className="share-bar" style={{ width: `${Math.min(100, row.share)}%` }} />{row.share.toLocaleString('de-DE', { maximumFractionDigits: 2 })} %</span>
+                                )}
+                              </td>
+                              <td className="num">{row.cost === null ? <span className="missing-value" title="Preis oder Einheit im Rohstoff fehlt">–</span> : (
+                                <span title={row.priceIsReference ? `Richtpreis (Stand ${referencePriceDate}) – durch Lieferantenpreis ersetzen` : undefined}>
+                                  {row.cost.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: row.cost > 0 && row.cost < 0.01 ? 4 : 2 })}{row.priceIsReference && ' ≈'}
+                                </span>
+                              )}</td>
+                              <td><input type="text" value={row.note} onChange={(event) => updateRecipeItem(row.id, 'note', event.target.value)} placeholder="z. B. zuerst lösen" aria-label={`Hinweis ${row.name}`} /></td>
+                              <td className="row-actions">
+                                <button type="button" className="icon-button" onClick={() => moveRecipeItem(row.id, -1)} disabled={index === 0} aria-label="Nach oben">↑</button>
+                                <button type="button" className="icon-button" onClick={() => moveRecipeItem(row.id, 1)} disabled={index === recipeItems.length - 1} aria-label="Nach unten">↓</button>
+                                <button type="button" className="icon-button danger" onClick={() => removeRecipeItem(row.id)} aria-label={`${row.name} entfernen`}>✕</button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr>
+                            <td />
+                            <td>Summe</td>
+                            <td colSpan="2">{recipeCalculation.totalBase > 0 ? `${recipeCalculation.totalBase.toLocaleString('de-DE', { maximumFractionDigits: 1 })} g/ml` : '–'}</td>
+                            <td className="num">{recipeCalculation.totalBase > 0 ? '100 %' : '–'}</td>
+                            <td className="num">{recipeCalculation.totalCost.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}{!recipeCalculation.costComplete && ' *'}</td>
+                            <td colSpan="2">
+                              {recipeCalculation.costPerLiter !== null && `${recipeCalculation.costPerLiter.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 3 })} je Liter${recipeForm.kind === 'Konzentrat' ? ' Konzentrat' : ''}`}
+                              {recipeForm.kind === 'Konzentrat' && recipeCalculation.costPerLiter !== null && dilutionFactor(recipeForm.kind, recipeForm.dilution) && (
+                                <small className="table-subtext">
+                                  {(recipeCalculation.costPerLiter / dilutionFactor(recipeForm.kind, recipeForm.dilution)).toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 3 })} je Liter fertiges Getränk (1 + {recipeForm.dilution}) · ergibt {(recipeCalculation.batchLiters * dilutionFactor(recipeForm.kind, recipeForm.dilution)).toLocaleString('de-DE', { maximumFractionDigits: 2 })} l
+                                </small>
+                              )}
+                            </td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  )}
+                  {recipeItems.length > 0 && (
+                    <div className="recipe-editor-notes">
+                      {recipeCalculation.fillUp?.error && <p className="recipe-form-message" role="status">Auffüllen: {recipeCalculation.fillUp.error}</p>}
+                      {recipeCalculation.fillUp && !recipeCalculation.fillUp.error && (
+                        <small className="meta">„{recipeItems[recipeCalculation.fillUp.index]?.name}“ wird auf die Batchgröße {(recipeCalculation.fillUp.targetBase).toLocaleString('de-DE')} ml aufgefüllt.</small>
+                      )}
+                      {!recipeCalculation.fillUp && recipeCalculation.batchLiters && Math.abs(recipeCalculation.totalBase - recipeCalculation.batchLiters * 1000) > 0.5 && (
+                        <small className="meta">Summe ({recipeCalculation.totalBase.toLocaleString('de-DE', { maximumFractionDigits: 1 })}) ≠ Batchgröße ({(recipeCalculation.batchLiters * 1000).toLocaleString('de-DE')} ml) – Wasser mit „auffüllen (ad)“ markieren, dann stimmt es automatisch.</small>
+                      )}
+                      <small className="meta">
+                        Anteil nach Gewicht/Volumen (Flüssigkeiten mit Dichte 1 gerechnet).
+                        {recipeCalculation.referencePriced.length > 0 && ` ≈ Richtpreis (Stand ${referencePriceDate}) bei: ${recipeCalculation.referencePriced.join(', ')}.`}
+                        {!recipeCalculation.costComplete && ` * Ohne Preis: ${recipeCalculation.missingPrices.join(', ')} – Preis in der Rohstoff-Datenbank ergänzen.`}
+                      </small>
+                      {!recipeCalculation.costComplete && (
+                        <button type="button" className="secondary-button small" onClick={() => applyReferencePrices(recipeCalculation.rows.filter((row) => row.cost === null && row.rawMaterial).map((row) => row.rawMaterial.id), setRecipeFormMessage)}>
+                          Fehlende Preise mit Richtpreisen füllen
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
                 <div className="lab-report-controls full-width">
                   <label>
                     Laborbericht hochladen
@@ -9890,6 +10644,7 @@ function App() {
                 <button type="submit" className="primary-button full-width-button">
                   {editingRecipeId !== null ? 'Änderungen speichern' : recipeForm.aiGenerated ? 'Entwurf zur Prüfung speichern' : 'Rezept speichern'}
                 </button>
+                {recipeFormMessage && <p className="recipe-form-message full-width" role="alert">{recipeFormMessage}</p>}
                 {editingRecipeId !== null && (
                   <button
                     type="button"
@@ -9897,6 +10652,8 @@ function App() {
                     onClick={() => {
                       setEditingRecipeId(null)
                       setRecipeForm(initialRecipeForm)
+                      setRecipeItems([])
+                      setRecipeFormMessage('')
                       setRecipeAiMessage('')
                     }}
                   >
@@ -9910,6 +10667,13 @@ function App() {
               <div className="panel-header">
                 <h2>Rezepturbestand</h2>
                 <span>{recipes.length} Einträge</span>
+                <label className="inline-check">
+                  <input type="checkbox" checked={recipePrintWithCosts} onChange={(event) => setRecipePrintWithCosts(event.target.checked)} />
+                  Kosten drucken
+                </label>
+                <button type="button" className="secondary-button small" onClick={() => printRecipeList(recipes)} disabled={recipes.length === 0}>
+                  Komplette Liste drucken / PDF
+                </button>
               </div>
               {recipeApprovalMessage && <p className="recipe-approval-message" role="status">{recipeApprovalMessage}</p>}
               <div className="card-list">
@@ -9924,11 +10688,31 @@ function App() {
                     {recipe.status === 'Freigegeben' && recipe.approvedAt && (
                       <p className="recipe-approval-meta">Freigegeben von {recipe.approvedBy || 'Admin'} am {new Date(recipe.approvedAt).toLocaleString('de-DE')}</p>
                     )}
-                    <ul>
-                      {recipe.ingredients.split('\n').map((ingredient, index) => (
-                        <li key={`${recipe.id}-${index}`}>{ingredient}</li>
-                      ))}
-                    </ul>
+                    {recipe.items?.length ? (() => {
+                      const summary = calculateRecipe(recipe.items, rawMaterials, recipe.batchSize)
+                      return (
+                        <>
+                          <ol className="recipe-card-items">
+                            {summary.rows.map((row) => (
+                              <li key={row.id}>
+                                <span>{row.name}</span>
+                                <span className="meta">{row.amount} {row.unit}{row.share !== null && ` · ${row.share.toLocaleString('de-DE', { maximumFractionDigits: 1 })} %`}</span>
+                              </li>
+                            ))}
+                          </ol>
+                          <p className="recipe-card-total">
+                            Kosten je Charge: <strong>{summary.totalCost.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}{!summary.costComplete && ' *'}</strong>
+                            {summary.costPerLiter !== null && <> · {summary.costPerLiter.toLocaleString('de-DE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 3 })}/l</>}
+                          </p>
+                        </>
+                      )
+                    })() : (
+                      <ul>
+                        {String(recipe.ingredients || '').split('\n').filter(Boolean).map((ingredient, index) => (
+                          <li key={`${recipe.id}-${index}`}>{ingredient}</li>
+                        ))}
+                      </ul>
+                    )}
                     {recipe.labReports?.length > 0 && (
                       <div className="lab-report-list">
                         <strong>Laborberichte ({recipe.labReports.length})</strong>
@@ -9942,6 +10726,9 @@ function App() {
                       <button type="button" className="secondary-button small" onClick={() => editRecipe(recipe)}>
                         Bearbeiten
                       </button>
+                      <button type="button" className="secondary-button small" onClick={() => printRecipeList([recipe])}>
+                        Drucken
+                      </button>
                       <button type="button" className="danger-button" onClick={() => removeRecipe(recipe.id)}>
                         {requiresDeleteApproval ? 'Löschanfrage stellen' : 'Entfernen'}
                       </button>
@@ -9953,7 +10740,7 @@ function App() {
           </section>
         )}
 
-        {activeTab === 'rezepturen' && (
+        {activeTab === 'rezepturen' && recipeView === 'rezepturen' && (
           <section className="panel">
             <div className="panel-header">
               <div>
@@ -10432,6 +11219,27 @@ function App() {
                 >
                   Position hinzufügen
                 </button>
+                <button
+                  type="button"
+                  className="secondary-button full-width-button"
+                  onClick={() => {
+                    const shippingArticle = products.find((product) => String(product.category || '').trim().toLowerCase() === 'versand' && product.status !== 'Inaktiv')
+                    setSalesDocumentForm((current) => {
+                      const items = current.items.filter((line) => line.productId || String(line.customName || '').trim())
+                      return {
+                        ...current,
+                        items: [...items, shippingArticle
+                          ? { productId: String(shippingArticle.id), customName: '', quantity: '1', unitPrice: shippingArticle.unitPrice != null ? String(shippingArticle.unitPrice) : '' }
+                          : { productId: '__custom__', customName: 'Versand', quantity: '1', unitPrice: '' }],
+                      }
+                    })
+                  }}
+                >
+                  Versand hinzufügen
+                </button>
+                {!products.some((product) => String(product.category || '').trim().toLowerCase() === 'versand') && (
+                  <small>Tipp: Lege unter „Produkte“ einen Artikel mit Kategorie „Versand“ und deinem Versandpreis (netto) an – dann setzt „Versand hinzufügen“ ihn mit Preis ein.</small>
+                )}
                 <label>
                   Umsatzsteuer
                   <select value={salesDocumentForm.vatRate} onChange={(event) => setSalesDocumentForm((current) => ({ ...current, vatRate: event.target.value }))}>
@@ -10581,6 +11389,10 @@ function App() {
                           && currentUser?.role === 'admin'
                           && window.zyroPaywise?.mahnserviceSubmit
                           && <PaywiseMahnservice invoice={salesDocument} customer={paywiseCustomer} amount={payableTotal} sessionToken={authSessionToken} />}
+                        {salesDocument.kind === 'rechnung' && salesDocument.status !== 'Entwurf'
+                          && canManageFinance(currentUser)
+                          && window.zyroSevdesk?.invoicePush
+                          && <SevdeskInvoiceSync invoice={salesDocument} sessionToken={authSessionToken} />}
                         {salesDocument.status !== 'Storniert' && (
                           <button
                             type="button"
@@ -10597,7 +11409,57 @@ function App() {
                         {salesDocument.kind === 'kundenauftrag' && ['Verpackt', 'Abgeschlossen'].includes(salesDocument.status) && !followupDocument && (
                           <button type="button" className="primary-button" onClick={() => convertSalesDocument(salesDocument, 'rechnung')}>Rechnung erstellen</button>
                         )}
+                        {salesDocument.kind === 'kundenauftrag' && directShippableStatuses.includes(salesDocument.status) && directShipment?.orderId !== String(salesDocument.id) && (
+                          <button type="button" className="primary-button small" onClick={() => openDirectShipment(salesDocument)}>Sendung erstellen</button>
+                        )}
+                        {salesDocument.kind === 'kundenauftrag' && salesDocument.status === 'Verpackt' && (
+                          <button type="button" className="secondary-button small" onClick={() => setActiveTab('versand')}>Zum Versand</button>
+                        )}
                       </div>
+                      {directShipment?.orderId === String(salesDocument.id) && (
+                        <form className="direct-shipment-form" onSubmit={(event) => submitDirectShipment(event, salesDocument)}>
+                          <strong>Sendung für {salesDocument.number} erstellen</strong>
+                          <p className="meta">Ohne MDE-Scan: Bestand wird abgebucht, Rechnung erstellt und der Auftrag als versendet markiert.</p>
+                          <label>
+                            Versanddienst
+                            <select value={directShipment.carrier} onChange={(event) => setDirectShipment((current) => ({ ...current, carrier: event.target.value }))}>
+                              {shipmentCarriers.map((carrier) => <option key={carrier} value={carrier}>{carrier}</option>)}
+                            </select>
+                          </label>
+                          {directShipment.carrier === 'Spedition' && (
+                            <label>
+                              Name der Spedition
+                              <input value={directShipment.carrierName} maxLength="100" required onChange={(event) => setDirectShipment((current) => ({ ...current, carrierName: event.target.value }))} />
+                            </label>
+                          )}
+                          {directShipment.carrier === 'DPD' && (
+                            <DpdLabelFields value={directShipment} onChange={(patch) => setDirectShipment((current) => ({ ...current, ...patch }))} />
+                          )}
+                          {!(directShipment.carrier === 'DPD' && directShipment.labelMode === 'dpd') && (
+                            <>
+                              <label>
+                                Sendungsnummer
+                                <input value={directShipment.trackingNumber} maxLength="120" required onChange={(event) => setDirectShipment((current) => ({ ...current, trackingNumber: event.target.value }))} />
+                              </label>
+                              <label>
+                                Tracking-Link (optional, HTTPS)
+                                <input type="url" placeholder="https://…" value={directShipment.trackingUrl} maxLength="2000" onChange={(event) => setDirectShipment((current) => ({ ...current, trackingUrl: event.target.value }))} />
+                              </label>
+                            </>
+                          )}
+                          <label className="manual-shipment-check">
+                            <input type="checkbox" checked={directShipment.notifyCustomer} disabled={!salesDocument.recipientEmail} onChange={(event) => setDirectShipment((current) => ({ ...current, notifyCustomer: event.target.checked }))} />
+                            {salesDocument.recipientEmail ? `Kunde per E-Mail informieren (${salesDocument.recipientEmail})` : 'Keine Kunden-E-Mail im Auftrag hinterlegt'}
+                          </label>
+                          <div className="mini-actions">
+                            <button type="submit" className="primary-button small" disabled={mdeBusy}>{mdeBusy ? 'Wird gebucht …' : directShipment.carrier === 'DPD' && directShipment.labelMode === 'dpd' ? 'DPD-Label erzeugen & versenden' : 'Als versendet buchen'}</button>
+                            <button type="button" className="secondary-button small" disabled={mdeBusy} onClick={() => setDirectShipment(null)}>Abbrechen</button>
+                          </div>
+                        </form>
+                      )}
+                      {directShipmentMessage.id === String(salesDocument.id) && directShipmentMessage.text && (
+                        <p className="sales-feedback" role="status">{directShipmentMessage.text}</p>
+                      )}
                     </article>
                   )
                 })}
@@ -10778,9 +11640,78 @@ function App() {
               <div>
                 <p className="eyebrow">Versandzentrale</p>
                 <h2>Pakete, Etiketten &amp; Sendungsverfolgung</h2>
-                <p className="meta">Versanddaten werden in der Cloud gespeichert und mit dem Kundenauftrag synchronisiert. DPD und Spedition sind verfügbar. Die Einrichtung eines DPD-API-Zugangs ist vorbereitet; echte frankierte Labels erfordern zusätzlich die DPD-Schnittstellendokumentation und eine technische Anbindung.</p>
+                <p className="meta">Versanddaten werden in der Cloud gespeichert und mit dem Kundenauftrag synchronisiert. Bei DPD kannst du wählen: Label automatisch über den DPD-Webservice erzeugen oder ein vorhandenes Label mit Sendungsnummer eintragen.</p>
               </div>
             </div>
+            <section className="panel shipment-card manual-shipment">
+              <div className="panel-header">
+                <div>
+                  <h3>Sendung manuell anlegen</h3>
+                  <p className="meta">Für Pakete ohne Shop-Auftrag, z. B. Muster, Ersatzlieferungen oder Händler. Der Empfänger bekommt auf Wunsch eine E-Mail mit Tracking-Link und später die Bewertungsanfrage.</p>
+                </div>
+                <button type="button" className={manualShipmentOpen ? 'secondary-button' : 'primary-button'} onClick={() => setManualShipmentOpen((open) => !open)}>
+                  {manualShipmentOpen ? 'Schließen' : '+ Neue Sendung'}
+                </button>
+              </div>
+              {manualShipmentOpen && (
+                <form className="form-grid" onSubmit={createManualShipment}>
+                  <label>
+                    Empfänger (Name oder Firma)
+                    <input value={manualShipmentForm.recipient} maxLength="160" required onChange={(event) => setManualShipmentForm((current) => ({ ...current, recipient: event.target.value }))} />
+                  </label>
+                  <label>
+                    E-Mail des Empfängers
+                    <input type="email" value={manualShipmentForm.recipientEmail} maxLength="254" required={manualShipmentForm.notifyCustomer} onChange={(event) => setManualShipmentForm((current) => ({ ...current, recipientEmail: event.target.value }))} />
+                  </label>
+                  <label className="manual-shipment-wide">
+                    Lieferadresse
+                    <textarea rows="3" value={manualShipmentForm.recipientAddress} maxLength="500" required={manualShipmentForm.carrier === 'DPD' && manualShipmentForm.labelMode === 'dpd'} placeholder={'Straße Nr.\nPLZ Ort'} onChange={(event) => setManualShipmentForm((current) => ({ ...current, recipientAddress: event.target.value }))} />
+                  </label>
+                  <label>
+                    Versanddienst
+                    <select value={manualShipmentForm.carrier} onChange={(event) => setManualShipmentForm((current) => ({ ...current, carrier: event.target.value }))}>
+                      {shipmentCarriers.map((carrier) => <option key={carrier} value={carrier}>{carrier}</option>)}
+                    </select>
+                  </label>
+                  {manualShipmentForm.carrier === 'Spedition' && (
+                    <label>
+                      Name der Spedition
+                      <input value={manualShipmentForm.carrierName} maxLength="100" required onChange={(event) => setManualShipmentForm((current) => ({ ...current, carrierName: event.target.value }))} />
+                    </label>
+                  )}
+                  {manualShipmentForm.carrier === 'DPD' && (
+                    <DpdLabelFields value={manualShipmentForm} onChange={(patch) => setManualShipmentForm((current) => ({ ...current, ...patch }))} />
+                  )}
+                  {!(manualShipmentForm.carrier === 'DPD' && manualShipmentForm.labelMode === 'dpd') && (
+                    <>
+                      <label>
+                        Sendungsnummer
+                        <input value={manualShipmentForm.trackingNumber} maxLength="120" required onChange={(event) => setManualShipmentForm((current) => ({ ...current, trackingNumber: event.target.value }))} />
+                      </label>
+                      <label>
+                        Tracking-Link (optional, HTTPS)
+                        <input type="url" placeholder="https://…" value={manualShipmentForm.trackingUrl} maxLength="2000" onChange={(event) => setManualShipmentForm((current) => ({ ...current, trackingUrl: event.target.value }))} />
+                      </label>
+                    </>
+                  )}
+                  <label>
+                    Referenz (optional)
+                    <input value={manualShipmentForm.reference} maxLength="120" placeholder="z. B. Muster EDEKA" onChange={(event) => setManualShipmentForm((current) => ({ ...current, reference: event.target.value }))} />
+                  </label>
+                  <label className="manual-shipment-wide">
+                    Interne Notiz (optional)
+                    <textarea rows="2" value={manualShipmentForm.note} maxLength="1000" onChange={(event) => setManualShipmentForm((current) => ({ ...current, note: event.target.value }))} />
+                  </label>
+                  <label className="manual-shipment-check manual-shipment-wide">
+                    <input type="checkbox" checked={manualShipmentForm.notifyCustomer} onChange={(event) => setManualShipmentForm((current) => ({ ...current, notifyCustomer: event.target.checked }))} />
+                    Empfänger per E-Mail über den Versand informieren (mit Tracking-Link)
+                  </label>
+                  <div className="finance-form-actions manual-shipment-wide">
+                    <button type="submit" className="primary-button" disabled={mdeBusy}>{mdeBusy ? 'Wird angelegt …' : manualShipmentForm.carrier === 'DPD' && manualShipmentForm.labelMode === 'dpd' ? 'DPD-Label erzeugen & Sendung anlegen' : 'Sendung anlegen'}</button>
+                  </div>
+                </form>
+              )}
+            </section>
             <section className="panel shipment-card">
               <div className="panel-header">
                 <div>
@@ -10916,7 +11847,7 @@ function App() {
                       <article className="panel shipment-card" key={salesDocument.id}>
                         <div className="shipment-card-header">
                           <div>
-                            <span className="eyebrow">{salesDocument.status}</span>
+                            <span className="eyebrow">{salesDocument.status}{salesDocument.manualShipment ? ' · Manuelle Sendung' : ''}</span>
                             <h3>{salesDocument.number} · {salesDocument.recipient}</h3>
                           </div>
                           <button
@@ -10933,7 +11864,7 @@ function App() {
                                 await printMdeShippingLabel(labelWindow, salesDocument, {
                                   ...salesDocument,
                                   ...draft,
-                                  carrierName: draft.carrier === 'DPD' ? 'DPD' : draft.carrierName,
+                                  carrierName: draft.carrier === 'Spedition' ? draft.carrierName : draft.carrier,
                                 })
                               } catch (error) {
                                 labelWindow?.close()
@@ -10970,8 +11901,7 @@ function App() {
                             <label>
                               Versanddienst
                               <select value={draft.carrier} onChange={(event) => shipmentActions.updateDraft(salesDocument, 'carrier', event.target.value)}>
-                                <option value="DPD">DPD</option>
-                                <option value="Spedition">Spedition</option>
+                                {shipmentCarriers.map((carrier) => <option key={carrier} value={carrier}>{carrier}</option>)}
                               </select>
                             </label>
                             {draft.carrier === 'Spedition' && (
@@ -10980,19 +11910,36 @@ function App() {
                                 <input value={draft.carrierName} maxLength="100" onChange={(event) => shipmentActions.updateDraft(salesDocument, 'carrierName', event.target.value)} required />
                               </label>
                             )}
-                            <label>
-                              Sendungsnummer
-                              <input value={draft.trackingNumber} maxLength="120" onChange={(event) => shipmentActions.updateDraft(salesDocument, 'trackingNumber', event.target.value)} required />
-                            </label>
-                            <label>
-                              Tracking-Link (optional, HTTPS)
-                              <input type="url" placeholder="https://…" value={draft.trackingUrl} maxLength="2000" onChange={(event) => shipmentActions.updateDraft(salesDocument, 'trackingUrl', event.target.value)} />
-                            </label>
-                            <button type="submit" className="primary-button" disabled={mdeBusy}>{mdeBusy ? 'Versand wird gespeichert …' : 'Als versendet markieren'}</button>
+                            {draft.carrier === 'DPD' && (
+                              <DpdLabelFields value={draft} onChange={(patch) => Object.entries(patch).forEach(([field, value]) => shipmentActions.updateDraft(salesDocument, field, value))} />
+                            )}
+                            {!(draft.carrier === 'DPD' && draft.labelMode === 'dpd') && (
+                              <>
+                                <label>
+                                  Sendungsnummer
+                                  <input value={draft.trackingNumber} maxLength="120" onChange={(event) => shipmentActions.updateDraft(salesDocument, 'trackingNumber', event.target.value)} required />
+                                </label>
+                                <label>
+                                  Tracking-Link (optional, HTTPS)
+                                  <input type="url" placeholder="https://…" value={draft.trackingUrl} maxLength="2000" onChange={(event) => shipmentActions.updateDraft(salesDocument, 'trackingUrl', event.target.value)} />
+                                </label>
+                              </>
+                            )}
+                            <button type="submit" className="primary-button" disabled={mdeBusy}>{mdeBusy ? 'Versand wird gespeichert …' : draft.carrier === 'DPD' && draft.labelMode === 'dpd' ? 'DPD-Label erzeugen & versenden' : 'Als versendet markieren'}</button>
                           </form>
                         ) : (
                           <div className="shipment-tracking">
                             <span><strong>{salesDocument.carrierName || salesDocument.carrier}</strong> · {salesDocument.trackingNumber || 'Keine Sendungsnummer'}</span>
+                            {salesDocument.dpdParcelLabelNumber && (
+                              <button type="button" className="secondary-button" disabled={mdeBusy} onClick={async () => {
+                                try {
+                                  const label = await window.zyroMde.getDpdLabel(salesDocument.id, authSessionToken)
+                                  await openLabelPdf(label.labelPdfBase64, `DPD-${label.parcelLabelNumber}.pdf`)
+                                } catch (error) {
+                                  setMdeMessage(`DPD-Label konnte nicht geöffnet werden: ${error.message}`)
+                                }
+                              }}>DPD-Label öffnen</button>
+                            )}
                             {trackingUrl && <a className="secondary-button" href={trackingUrl} target="_blank" rel="noopener noreferrer">Sendung verfolgen</a>}
                             {salesDocument.trackingToken && (
                               <a className="secondary-button" href={`/tracking/?token=${encodeURIComponent(salesDocument.trackingToken)}`} target="_blank" rel="noopener noreferrer">
@@ -11005,7 +11952,7 @@ function App() {
                             )}
                             {salesDocument.deliveryConfirmedAt ? (
                               <>
-                                <span>Zustellung bestätigt{salesDocument.deliveryConfirmationSource === 'DHL' ? ' durch DHL' : ' manuell'} · {formatTimestamp(salesDocument.deliveryConfirmedAt)}</span>
+                                <span>Zustellung bestätigt{['DHL', 'DPD'].includes(salesDocument.deliveryConfirmationSource) ? ` durch ${salesDocument.deliveryConfirmationSource}` : ' manuell'} · {formatTimestamp(salesDocument.deliveryConfirmedAt)}</span>
                                 <span>{salesDocument.reviewRequestStatus === 'sent'
                                   ? 'Bewertungs-E-Mail gesendet.'
                                   : salesDocument.reviewRequestStatus === 'submitted'
@@ -11019,8 +11966,14 @@ function App() {
                                   <button type="button" className="primary-button small" disabled={mdeBusy || !salesDocument.recipientEmail} onClick={() => retryReviewRequest(salesDocument)}>Bewertungs-E-Mail erneut senden</button>
                                 )}
                               </>
-                            ) : salesDocument.carrier === 'DHL' ? (
-                              <span>DHL-Zustellung wird automatisch geprüft. Die Bewertungs-E-Mail folgt nach bestätigter Zustellung.</span>
+                            ) : ['DHL', 'DPD'].includes(salesDocument.carrier) ? (
+                              <>
+                                <span>{salesDocument.carrier}-Zustellung wird automatisch alle 3 Stunden geprüft. Die Bewertungs-E-Mail geht nach der Zustellung automatisch raus.</span>
+                                <button type="button" className="secondary-button small" disabled={mdeBusy} onClick={() => refreshCarrierStatus(salesDocument)}>Status jetzt abrufen</button>
+                                {salesDocument.carrier === 'DPD' && (
+                                  <button type="button" className="secondary-button small" disabled={mdeBusy} onClick={() => confirmShipmentDelivery(salesDocument)}>Zustellung manuell bestätigen</button>
+                                )}
+                              </>
                             ) : (
                               <button type="button" className="secondary-button" disabled={mdeBusy} onClick={() => confirmShipmentDelivery(salesDocument)}>
                                 Zustellung bestätigen &amp; Bewertung anfragen

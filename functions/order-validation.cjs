@@ -65,6 +65,9 @@ const validatePublicOrder = (input, catalog = products, availablePaymentMethods 
     if (!product || product.active === false || seenProducts.has(productId) || !Number.isInteger(quantity) || quantity < 1 || quantity > 9999) {
       throw new Error('Produkt oder Menge ungültig.')
     }
+    if (typeof product !== 'string' && product.trayOnly === true && quantity % 24 !== 0) {
+      throw new Error(`„${product.name}“ gibt es nur als ganzes 24er-Tray.`)
+    }
     seenProducts.add(productId)
     const isPreorder = typeof product !== 'string'
       && product.stock === 0

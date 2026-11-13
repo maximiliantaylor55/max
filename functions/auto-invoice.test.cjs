@@ -83,7 +83,7 @@ test('PDF wird erzeugt', async () => {
     .replace(/<([0-9a-f]+)>/gi, (_match, hex) => Buffer.from(hex, 'hex').toString('latin1'))
     .replace(/\s-?\d+\s/g, ' ')
   const compactInvoiceText = readableInvoiceText.replace(/([a-z]) (?=[a-z])/g, '$1')
-  assert.match(readableInvoiceText, /Neue Rechnungsfirma GmbH/i)
+  assert.match(compactInvoiceText, /Neue Rechnungsfirma GmbH/i)
   assert.match(readableInvoiceText, /Geschäftsführer/)
   assert.match(compactInvoiceText, /Max Mustermann/)
   assert.match(compactInvoiceText, /Erika Musterfrau/)

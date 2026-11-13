@@ -3,6 +3,7 @@ import { readWebSyncState, writeWebSyncState } from './web-sync-state.js'
 const dataKeys = [
   'zyro-products',
   'zyro-recipes',
+  'zyro-raw-materials',
   'zyro-lab-tests',
   'zyro-orders',
   'zyro-sales-documents',
@@ -12,7 +13,7 @@ const dataKeys = [
   'zyro-payment-requests',
   'zyro-payment-settings',
   'zyro-cost-calculations',
-  'zyro-elster-setup',
+  'zyro-contract-jobs',
   'zyro-company-details',
   'zyro-bottler-details',
   'zyro-website-orders',
@@ -170,8 +171,9 @@ const getAccessibleDataKeys = () => {
   const canAccessFinance = isAdmin || user?.permissions?.includes('finanzen')
   const canAccessSalesTarget = isAdmin || user?.permissions?.includes('analyse')
   return dataKeys.filter((key) => {
-    if (!isAdmin && ['zyro-shop-settings', 'zyro-shop-discounts', 'zyro-elster-setup', 'zyro-company-details'].includes(key)) return false
+    if (!isAdmin && ['zyro-shop-settings', 'zyro-shop-discounts', 'zyro-company-details'].includes(key)) return false
     if (key === 'zyro-cost-calculations' && !isAdmin) return false
+    if (key === 'zyro-contract-jobs' && !isAdmin) return false
     if (key === 'zyro-finance-entries' && !canAccessFinance) return false
     if (['zyro-suppliers', 'zyro-purchase-orders'].includes(key) && !isAdmin && !user?.permissions?.includes('einkauf')) return false
     if (key === 'zyro-payment-settings' && !isAdmin) return false
@@ -562,6 +564,10 @@ if (typeof window !== 'undefined' && !window.zyroMde) {
     listProductReviews: () => mdeRequest('reviews-list'),
     moderateProductReview: (reviewId, decision) => mdeRequest('review-moderate', { reviewId, decision }),
     notifyShipment: (orderId) => mdeRequest('notify-shipment', { orderId }),
+    createManualShipment: (shipment) => mdeRequest('manual-shipment', shipment),
+    createDirectShipment: (shipment) => mdeRequest('direct-shipment', shipment),
+    getDpdLabel: (orderId) => mdeRequest('dpd-label', { orderId }),
+    getCarrierStatus: (orderId) => mdeRequest('carrier-status', { orderId }),
     notifyPacked: (orderId) => mdeRequest('notify', { orderId }),
   }
 }
@@ -662,7 +668,7 @@ if (typeof window !== 'undefined' && !window.zyroAuth) {
         && !readCachedUser()?.permissions?.includes('maschinenbau')) return { found: false, value: null }
       if (key === 'zyro-hr-sensitive' && readCachedUser()?.role !== 'admin') return { found: false, value: null }
       if (key === 'zyro-cost-calculations' && readCachedUser()?.role !== 'admin') return { found: false, value: null }
-      if (key === 'zyro-elster-setup' && readCachedUser()?.role !== 'admin') return { found: false, value: null }
+      if (key === 'zyro-contract-jobs' && readCachedUser()?.role !== 'admin') return { found: false, value: null }
       if (key === 'zyro-company-details' && readCachedUser()?.role !== 'admin') return { found: false, value: null }
       if (key === 'zyro-payment-settings' && readCachedUser()?.role !== 'admin') return { found: false, value: null }
       if (key === 'zyro-finance-entries'
@@ -730,8 +736,8 @@ if (typeof window !== 'undefined' && !window.zyroAuth) {
       if (key === 'zyro-cost-calculations' && readCachedUser()?.role !== 'admin') {
         return { success: false, message: 'Kalkulationen dürfen nur von einem Admin verwaltet werden.' }
       }
-      if (key === 'zyro-elster-setup' && readCachedUser()?.role !== 'admin') {
-        return { success: false, message: 'ELSTER-Einstellungen dürfen nur von einem Admin verwaltet werden.' }
+      if (key === 'zyro-contract-jobs' && readCachedUser()?.role !== 'admin') {
+        return { success: false, message: 'Lohnherstellung darf nur von einem Admin verwaltet werden.' }
       }
       if (key === 'zyro-company-details' && readCachedUser()?.role !== 'admin') {
         return { success: false, message: 'Firmendaten dürfen nur von einem Admin verwaltet werden.' }
@@ -859,11 +865,52 @@ if (typeof window !== 'undefined' && !window.zyroAuth) {
   window.zyroEvents = {
     list: (since) => requestJson(`/api/management/events?since=${encodeURIComponent(Number(since) || 0)}`),
   }
+  const mailboxRequest = (action, payload = {}) => requestJson('/api/management/mailbox', {
+    method: 'POST',
+    body: JSON.stringify({ action, ...payload }),
+  })
+  const mailboxFolder = (options) => (typeof options?.folder === 'string' ? options.folder.slice(0, 255) : 'inbox')
+  window.zyroMailbox = {
+    getSettings: () => mailboxRequest('settings'),
+    saveSettings: (value) => mailboxRequest('save', { config: value }),
+    remove: () => mailboxRequest('remove'),
+    listFolders: () => mailboxRequest('list-folders'),
+    list: (options) => mailboxRequest('list', { folder: mailboxFolder(options), limit: options?.limit }),
+    read: (options) => mailboxRequest('read', { folder: mailboxFolder(options), uid: options?.uid }),
+    deleteMessage: (options) => mailboxRequest('delete', { folder: mailboxFolder(options), uid: options?.uid }),
+    moveMessage: (options) => mailboxRequest('move', {
+      folder: typeof options?.folder === 'string' ? options.folder.slice(0, 255) : '',
+      toFolder: typeof options?.toFolder === 'string' ? options.toFolder.slice(0, 255) : '',
+      uid: options?.uid,
+    }),
+    send: (message) => mailboxRequest('send', { message: message || {} }),
+    openLink: async (value) => {
+      let url
+      try {
+        url = new URL(String(value || ''))
+      } catch {
+        throw new Error('Link ist ungültig.')
+      }
+      if (!['https:', 'http:', 'mailto:'].includes(url.protocol)) throw new Error('Dieser Link-Typ wird nicht geöffnet.')
+      window.open(url.toString(), '_blank', 'noopener,noreferrer')
+    },
+  }
   window.zyroPaywise = {
     status: () => paywiseRequest('status'),
     submit: (submission) => paywiseRequest('submit', submission),
     mahnserviceGet: (invoiceId) => paywiseRequest('mahnservice-get', { invoiceId }),
     mahnserviceSubmit: (submission) => paywiseRequest('mahnservice-submit', submission),
     mahnservicePayment: (invoiceId) => paywiseRequest('mahnservice-payment', { invoiceId }),
+  }
+  const sevdeskRequest = (action, payload = {}) => requestJson('/api/management/sevdesk', {
+    method: 'POST',
+    body: JSON.stringify({ action, ...payload }),
+  })
+  window.zyroSevdesk = {
+    status: () => sevdeskRequest('status'),
+    overview: () => sevdeskRequest('overview'),
+    syncAll: () => sevdeskRequest('sync-all'),
+    invoiceGet: (invoiceId) => sevdeskRequest('invoice-get', { invoiceId }),
+    invoicePush: (invoiceId) => sevdeskRequest('invoice-push', { invoiceId }),
   }
 }

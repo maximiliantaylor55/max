@@ -1,0 +1,20 @@
+/* ZYRO Kundenbewertungen ganz unten über dem Footer */
+.zyro-reviews {
+  margin: clamp(24px, 4vw, 48px) auto clamp(32px, 5vw, 64px);
+  width: min(100% - 40px, 1180px);
+  color: var(--ink, #172d28);
+}
+.zyro-reviews[hidden] { display: none; }
+.zyro-reviews-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 20px; margin-bottom: 24px; }
+.zyro-reviews .eyebrow { margin: 0 0 10px; }
+.zyro-reviews h2 { margin: 0; font-family: var(--display, Inter, sans-serif); font-size: clamp(2rem, 4.5vw, 3.4rem); line-height: 0.95; font-weight: 800; letter-spacing: -0.02em; }
+.zyro-reviews h2 span { color: var(--orange, #f47745); }
+.zyro-reviews-average { display: flex; align-items: baseline; gap: 10px; margin: 0; padding: 12px 18px; border-radius: 999px; background: #fff4d5; color: #79510b; }
+.zyro-reviews-average strong { font-size: 1.6rem; font-weight: 800; }
+.zyro-reviews-average small { font-size: 0.85rem; opacity: 0.8; }
+.zyro-reviews-stars { margin: 0; color: #e0a10f; letter-spacing: 2px; font-size: 1rem; }
+.zyro-reviews-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+.zyro-review-card { display: grid; align-content: start; gap: 10px; padding: 22px; border: 1px solid var(--line, rgba(23, 45, 40, 0.16)); border-radius: 22px; background: #fff; box-shadow: 0 10px 30px rgba(23, 45, 40, 0.05); }
+.zyro-review-card blockquote { margin: 0; font-size: 1rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.zyro-review-meta { margin: 0; font-size: 0.8rem; color: var(--muted, #65736b); }
+.zyro-reviews-note { margin: 18px 0 0; font-size: 0.8rem; color: var(--muted, #65736b); }

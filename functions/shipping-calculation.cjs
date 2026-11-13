@@ -25,7 +25,50 @@ const packBusinessDpdTrays = (trayWeights, parcelCount) => {
   return placeTray(0) ? parcelWeights : null
 }
 
-const calculateShipping = (items, catalog, settings, { businessCustomer = false } = {}) => {
+// Versandkosten, die direkt am Artikel hinterlegt sind (je Dose / je 24er-Tray).
+const productShippingCents = (item, product) => {
+  const unit = product?.shippingUnitCents
+  const tray = product?.shippingTrayCents
+  const hasUnit = Number.isSafeInteger(unit) && unit >= 0
+  const hasTray = Number.isSafeInteger(tray) && tray >= 0
+  if (!hasUnit && !hasTray) return null
+  const trays = Math.floor(item.quantity / 24)
+  const singles = item.quantity % 24
+  const trayCost = hasTray ? tray : unit * 24
+  const unitCost = hasUnit ? unit : Math.ceil(tray / 24)
+  return trays * trayCost + singles * unitCost
+}
+
+const calculateShipping = (items, catalog, settings, options = {}) => {
+  const fixed = items.map((item) => productShippingCents(item, catalog.get(item.productId)))
+  if (fixed.some((cents) => cents !== null)) {
+    const fixedCents = fixed.reduce((sum, cents) => sum + (cents || 0), 0)
+    const rest = items.filter((_item, index) => fixed[index] === null)
+    const weightOf = (list) => list.reduce((total, item) => total + item.quantity * (Number(catalog.get(item.productId)?.unitWeightGrams) || 0), 0)
+    if (!rest.length) {
+      const shippingWeightGrams = weightOf(items)
+      return {
+        shippingWeightGrams,
+        shippingBillableWeightKg: Math.ceil(shippingWeightGrams / 1000),
+        shippingPriceCents: fixedCents,
+        shippingPalletCount: 0,
+        shippingParcelCount: 0,
+        shippingMethod: 'Versand laut Artikel',
+      }
+    }
+    const restShipping = calculateShippingByWeight(rest, catalog, settings, options)
+    return {
+      ...restShipping,
+      shippingWeightGrams: restShipping.shippingWeightGrams + weightOf(items.filter((_item, index) => fixed[index] !== null)),
+      shippingBillableWeightKg: Math.ceil((restShipping.shippingWeightGrams + weightOf(items.filter((_item, index) => fixed[index] !== null))) / 1000),
+      shippingPriceCents: restShipping.shippingPriceCents + fixedCents,
+      shippingMethod: `${restShipping.shippingMethod} + Versand laut Artikel`,
+    }
+  }
+  return calculateShippingByWeight(items, catalog, settings, options)
+}
+
+const calculateShippingByWeight = (items, catalog, settings, { businessCustomer = false } = {}) => {
   const largeCartonTareGrams = Number(settings.largeCartonTareGrams)
   const smallCartonTareGrams = Number(settings.smallCartonTareGrams)
   if (!Number.isSafeInteger(largeCartonTareGrams) || largeCartonTareGrams < 0 || !Number.isSafeInteger(smallCartonTareGrams) || smallCartonTareGrams < 0) {

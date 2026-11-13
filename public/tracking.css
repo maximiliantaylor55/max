@@ -254,3 +254,25 @@ footer {
     gap: 4px;
   }
 }
+
+/* Fortschritt und Zustellstatus */
+.status-check.is-delivered { background: #31d0aa; color: #07111f; }
+.delivered-note { margin: 16px 0 0; padding: 12px 14px; border-radius: 12px; background: rgba(49, 208, 170, .14); color: #b9f5e4; font-weight: 600; }
+.tracking-steps { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; margin: 20px 0 8px; padding: 0; list-style: none; }
+.tracking-steps[hidden] { display: none; }
+.tracking-steps li { position: relative; padding-top: 14px; color: #94a3b8; font-size: .72rem; line-height: 1.25; text-align: center; }
+.tracking-steps li::before { content: ""; position: absolute; top: 0; right: 0; left: 0; height: 6px; border-radius: 3px; background: rgba(148, 163, 184, .25); }
+.tracking-steps li.done::before { background: #31d0aa; }
+.tracking-steps li.current { color: #f0fdfa; font-weight: 700; }
+.tracking-steps li.current:not(.done)::before { background: #f6b04a; }
+@media (max-width: 520px) {
+  .tracking-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 12px; }
+}
+
+/* Prüfung auf Abruf */
+.refresh-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 20px; }
+.refresh-button { min-height: 46px; padding: 0 20px; border: 1px solid #31d0aa; border-radius: 999px; background: transparent; color: #b9f5e4; font: inherit; font-weight: 700; cursor: pointer; }
+.refresh-button:hover:not(:disabled) { background: rgba(49, 208, 170, .14); }
+.refresh-button:disabled { opacity: .6; cursor: progress; }
+.refresh-button:focus-visible { outline: 3px solid #68e3c1; outline-offset: 2px; }
+.checked-at { color: #94a3b8; font-size: .85rem; }
