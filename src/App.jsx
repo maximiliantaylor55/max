@@ -785,9 +785,12 @@ const playIncomingNotificationSound = () => {
   }
 }
 
+// Diese Datensätze können Dateien enthalten (Dokumente, Produktetiketten) und werden nicht im kleinen localStorage gespiegelt.
+const largeStorageKeys = new Set(['zyro-archive-documents', 'zyro-products'])
+
 const writeStorage = (key, value, sessionToken) => {
   if (typeof window === 'undefined') return
-  if (key === 'zyro-archive-documents') {
+  if (largeStorageKeys.has(key)) {
     window.zyroData?.set(key, value, sessionToken)
       .then((result) => {
         if (result?.success === false) window.dispatchEvent(new CustomEvent('zyro-data-write-error', { detail: { message: result.message, key } }))
@@ -1190,7 +1193,7 @@ function App() {
   const persistCollection = (key, value, sessionToken) => {
     if (!networkSyncReadyRef.current || !sessionToken) return
     if (sharedSyncSkipRef.current.delete(key)) {
-      if (key === 'zyro-archive-documents') return
+      if (largeStorageKeys.has(key)) return
       try {
         window.localStorage.setItem(key, JSON.stringify(value))
       } catch {

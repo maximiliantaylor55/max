@@ -55,9 +55,12 @@ let callConnection
 const callMessageListeners = new Set()
 const callErrorListeners = new Set()
 const callDisconnectListeners = new Set()
-let archiveDocumentsCache = []
+// Große Datensätze (Dokumente, Produkte mit Etikett-/Bilddateien) passen nicht in den ~5-MB-localStorage
+// des Browsers und liegen deshalb in IndexedDB.
+const indexedDbKeys = [archiveDocumentsKey, 'zyro-products']
+const indexedDbCache = new Map()
 let archiveDatabase
-let archiveDocumentsLoaded = false
+let indexedDbLoaded = false
 const emit = (name, detail = {}) => window.dispatchEvent(new CustomEvent(name, { detail }))
 
 const archiveDocumentsReady = typeof window !== 'undefined' && !window.zyroAuth
@@ -91,46 +94,50 @@ const archiveDocumentsReady = typeof window !== 'undefined' && !window.zyroAuth
         archiveDatabase = database
         const transaction = database.transaction('collections', 'readwrite')
         const store = transaction.objectStore('collections')
-        const getRequest = store.get(archiveDocumentsKey)
-        let removeLegacyValue = false
-        getRequest.onsuccess = () => {
-          if (getRequest.result) {
-            archiveDocumentsCache = Array.isArray(getRequest.result.value) ? getRequest.result.value : []
-            return
-          }
-          let legacyValue
-          try {
-            legacyValue = window.localStorage.getItem(archiveDocumentsKey)
-          } catch (error) {
-            emit('zyro-data-sync-error', { message: `Vorhandene Archivdokumente konnten nicht gelesen werden: ${error.message}` })
-            transaction.abort()
-            return
-          }
-          if (legacyValue === null) return
-          try {
-            const documents = JSON.parse(legacyValue)
-            if (!Array.isArray(documents)) throw new Error('Das Archivformat ist ungültig.')
-            archiveDocumentsCache = documents
-            store.put({ key: archiveDocumentsKey, value: documents })
-            removeLegacyValue = true
-          } catch (error) {
-            emit('zyro-data-sync-error', { message: `Archivdokumente konnten nicht migriert werden: ${error.message}` })
-            transaction.abort()
+        const legacyKeysToRemove = []
+        for (const key of indexedDbKeys) {
+          const getRequest = store.get(key)
+          getRequest.onsuccess = () => {
+            let legacyValue
+            try {
+              legacyValue = window.localStorage.getItem(key)
+            } catch (error) {
+              emit('zyro-data-sync-error', { message: `Vorhandene Daten „${key}“ konnten nicht gelesen werden: ${error.message}` })
+              transaction.abort()
+              return
+            }
+            if (getRequest.result) {
+              indexedDbCache.set(key, getRequest.result.value)
+              // Veraltete Browser-Kopie entfernen, damit sie keinen localStorage-Platz belegt.
+              if (legacyValue !== null) legacyKeysToRemove.push(key)
+              return
+            }
+            if (legacyValue === null) return
+            try {
+              const value = JSON.parse(legacyValue)
+              if (!Array.isArray(value)) throw new Error('Das Datenformat ist ungültig.')
+              indexedDbCache.set(key, value)
+              store.put({ key, value })
+              legacyKeysToRemove.push(key)
+            } catch (error) {
+              emit('zyro-data-sync-error', { message: `Daten „${key}“ konnten nicht migriert werden: ${error.message}` })
+              transaction.abort()
+            }
           }
         }
         transaction.oncomplete = () => {
-          if (removeLegacyValue) {
+          for (const key of legacyKeysToRemove) {
             try {
-              window.localStorage.removeItem(archiveDocumentsKey)
+              window.localStorage.removeItem(key)
             } catch (error) {
-              emit('zyro-data-sync-error', { message: `Das migrierte Archiv ist gespeichert, aber der alte Browser-Eintrag konnte nicht entfernt werden: ${error.message}` })
+              emit('zyro-data-sync-error', { message: `Die migrierten Daten sind gespeichert, aber der alte Browser-Eintrag „${key}“ konnte nicht entfernt werden: ${error.message}` })
             }
           }
-          archiveDocumentsLoaded = true
+          indexedDbLoaded = true
           resolve(true)
         }
         transaction.onerror = () => {
-          emit('zyro-data-sync-error', { message: `Archivdokumente konnten nicht migriert werden: ${transaction.error?.message || 'Unbekannter Fehler'}` })
+          emit('zyro-data-sync-error', { message: `Lokale Daten konnten nicht migriert werden: ${transaction.error?.message || 'Unbekannter Fehler'}` })
           resolve(false)
         }
         transaction.onabort = () => resolve(false)
@@ -199,21 +206,23 @@ const requestJson = async (url, options = {}, requiresAuth = true) => {
   return result
 }
 
-const localValue = (key) => key === archiveDocumentsKey ? archiveDocumentsCache : readJson(key)
+const localValue = (key) => indexedDbKeys.includes(key)
+  ? (indexedDbCache.has(key) ? indexedDbCache.get(key) : (key === archiveDocumentsKey ? [] : null))
+  : readJson(key)
 const saveLocalValue = async (key, value) => {
-  if (key === archiveDocumentsKey) {
-    if (!await archiveDocumentsReady) throw new Error('Der lokale Archivspeicher ist nicht verfügbar; Dokumente wurden nicht gespeichert.')
-    if (!archiveDatabase) throw new Error('Der lokale Archivspeicher ist nicht verfügbar; Dokumente wurden nicht gespeichert.')
+  if (indexedDbKeys.includes(key)) {
+    if (!await archiveDocumentsReady) throw new Error('Der lokale Archivspeicher ist nicht verfügbar; Daten wurden nicht gespeichert.')
+    if (!archiveDatabase) throw new Error('Der lokale Archivspeicher ist nicht verfügbar; Daten wurden nicht gespeichert.')
     const transaction = archiveDatabase.transaction('collections', 'readwrite')
     if (value === null || value === undefined) transaction.objectStore('collections').delete(key)
     else transaction.objectStore('collections').put({ key, value })
     await new Promise((resolve, reject) => {
       transaction.oncomplete = resolve
-      transaction.onerror = () => reject(new Error(transaction.error?.message || 'Archivdokumente konnten nicht gespeichert werden.'))
-      transaction.onabort = () => reject(new Error(transaction.error?.message || 'Speichern der Archivdokumente wurde abgebrochen.'))
+      transaction.onerror = () => reject(new Error(transaction.error?.message || 'Daten konnten nicht gespeichert werden.'))
+      transaction.onabort = () => reject(new Error(transaction.error?.message || 'Speichern wurde abgebrochen.'))
     })
-    archiveDocumentsCache = Array.isArray(value) ? value : []
-    archiveDocumentsLoaded = true
+    if (value === null || value === undefined) indexedDbCache.delete(key)
+    else indexedDbCache.set(key, value)
     localRevision += 1
     return
   }
@@ -659,7 +668,10 @@ if (typeof window !== 'undefined' && !window.zyroAuth) {
     },
     get: (key) => {
       if (key === 'zyro-schedule' && !readCachedUser()) return { found: true, value: [] }
-      if (key === archiveDocumentsKey && archiveDocumentsLoaded) return { found: true, value: archiveDocumentsCache }
+      if (indexedDbKeys.includes(key) && indexedDbLoaded) {
+        if (key === archiveDocumentsKey) return { found: true, value: localValue(key) }
+        return indexedDbCache.has(key) ? { found: true, value: indexedDbCache.get(key) } : { found: false, value: null }
+      }
       if (key === 'zyro-lab-tests'
         && readCachedUser()?.role !== 'admin'
         && !readCachedUser()?.permissions?.includes('rezepturen')) return { found: false, value: null }
@@ -758,7 +770,7 @@ if (typeof window !== 'undefined' && !window.zyroAuth) {
         && !readCachedUser()?.permissions?.includes('einkauf')) {
         return { success: false, message: 'Für Einkaufsdaten brauchst du die Einkaufsberechtigung.' }
       }
-      const previousValue = readJson(key)
+      const previousValue = localValue(key)
       try {
         await saveLocalValue(key, value)
         if (isPaymentData) {
