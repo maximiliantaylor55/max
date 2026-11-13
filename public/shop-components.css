@@ -1,17 +1,17 @@
 .site-header {
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   grid-template-areas: "brand nav actions";
   align-items: center;
   column-gap: clamp(14px, 2vw, 30px);
 }
 .site-header > .wordmark { grid-area: brand; }
 .site-header > .menu-toggle { grid-area: menu; }
-.site-header > .site-nav { grid-area: nav; min-width: 0; flex-wrap: nowrap; }
+.site-header > .site-nav { grid-area: nav; min-width: 0; flex-wrap: nowrap; justify-self: center; }
 .header-actions { grid-area: actions; display: flex; min-width: 0; align-items: center; justify-self: end; gap: 9px; white-space: nowrap; }
 .header-actions > * { flex-shrink: 0; }
 .header-business-link { display: inline-flex; align-items: center; padding: 10px 12px; border: 1px solid var(--line); border-radius: 999px; color: var(--ink); font-size: 13px; font-weight: 700; text-decoration: none; transition: background .2s ease, transform .2s ease; }
 .header-business-link:hover { transform: translateY(-2px); background: rgba(255,255,255,.72); }
-@media (min-width: 1301px) {
+@media (min-width: 1401px) {
   .site-header > .site-nav { gap: clamp(14px, 1.25vw, 17px); }
 }
 .header-cart,
@@ -374,7 +374,7 @@ body.shop-panel-open { overflow: hidden; }
 .billing-fields { display: grid; gap: 12px; padding-top: 8px; }
 .billing-fields label { display: grid; gap: 5px; font-size: 13px; font-weight: 700; }
 
-@media (max-width: 1300px) {
+@media (max-width: 1400px) {
   .site-header { grid-template-columns: minmax(0,1fr) auto auto; grid-template-areas: "brand menu actions"; gap: 14px; }
   .site-header > .menu-toggle { display: grid; width: 42px; height: 42px; align-content: center; justify-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 50%; background: var(--paper); cursor: pointer; }
   .site-header > .menu-toggle span { width: 16px; height: 2px; background: var(--ink); }

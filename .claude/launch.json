@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "zyro-web",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--port", "5173", "--strictPort"],
+      "port": 5173
+    },
+    {
+      "name": "zyro-website",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "public", "--port", "5174", "--strictPort"],
+      "port": 5174
+    }
+  ]
+}

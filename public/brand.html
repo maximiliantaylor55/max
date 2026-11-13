@@ -21,17 +21,19 @@
     <link rel="stylesheet" href="/fonts/fonts.css?v=1" />
     <link rel="stylesheet" href="/brand.css?v=20261110-fonts" />
     <link rel="stylesheet" href="/brand-refresh.css?v=10" />
-    <link rel="stylesheet" href="/shop-components.css?v=18" />
+    <link rel="stylesheet" href="/shop-components.css?v=19" />
     <link rel="stylesheet" href="/cookie-hinweis.css?v=5" />
     <link rel="stylesheet" href="/newsletter.css?v=5" />
     <link rel="stylesheet" href="/reviews.css?v=1" />
     <link rel="stylesheet" href="/shop-home.css?v=2" />
+    <link rel="stylesheet" href="/rezeptur-faq.css?v=1" />
     <script src="/brand.js?v=20261105-email-link" defer></script>
     <script type="module" src="/shop.js?v=48"></script>
     <script src="/shop-fx.js?v=3" defer></script>
     <script src="/tracking-config.js?v=6" defer></script>
     <script src="/cookie-hinweis.js?v=5" defer></script>
     <script src="/newsletter.js?v=5" defer></script>
+    <script src="/rezeptur-faq.js?v=1" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">Zum Inhalt springen</a>
@@ -43,6 +45,8 @@
         <a href="#bewertungen" id="nav-reviews" hidden>Bewertungen</a>
         <a href="#marke">Über ZYRO</a>
         <a href="#handel">Handel &amp; Gastro</a>
+        <a href="#rezeptur">Rezeptur</a>
+        <a href="#faq">FAQ</a>
         <button type="button" id="open-account" class="header-nav-button">Mein Konto</button>
         <a href="#kontakt">Kontakt</a>
       </nav>
@@ -152,6 +156,131 @@
         <div class="trade-visual reveal">
           <img src="/zyro-pfirsich-maracuja-can-transparent.png" alt="ZYRO Dose für Handel und Gastronomie" loading="lazy" />
           <span>ZYRO · FÜR HANDEL &amp; GASTRO</span>
+        </div>
+      </section>
+
+      <section class="recipe-section" id="rezeptur" aria-labelledby="recipe-title">
+        <div class="recipe-intro reveal">
+          <div>
+            <p class="eyebrow">Rezepturentwicklung</p>
+            <h2 id="recipe-title">DEINE IDEE.<br /><em>UNSERE REZEPTUR.</em></h2>
+          </div>
+          <p>Du planst ein eigenes Getränk – als neue Marke, Eigenmarke für dein Geschäft oder als Weiterentwicklung einer bestehenden Rezeptur? Wir entwickeln mit dir eine Rezeptur, die schmeckt, sich wirtschaftlich abfüllen lässt und zu deiner Zielgruppe passt.</p>
+        </div>
+
+        <ol class="recipe-steps reveal" aria-label="Ablauf der Rezepturentwicklung">
+          <li><strong>01</strong><h3>Anfrage &amp; Briefing</h3><p>Du schickst uns deine Idee über das Formular: Getränkeart, Geschmack, Zielgruppe und Wünsche.</p></li>
+          <li><strong>02</strong><h3>Erstgespräch &amp; Angebot</h3><p>Wir klären Details, Machbarkeit und Rahmen und schicken dir ein unverbindliches Angebot.</p></li>
+          <li><strong>03</strong><h3>Musterentwicklung</h3><p>Wir entwickeln erste Muster nach deinem Briefing – von Süße über Säure bis Aroma.</p></li>
+          <li><strong>04</strong><h3>Verkostung &amp; Feinschliff</h3><p>Du verkostest die Muster, gibst Feedback und wir passen die Rezeptur an, bis sie sitzt.</p></li>
+          <li><strong>05</strong><h3>Übergabe &amp; Abfüllung</h3><p>Du erhältst die finale Rezeptur – auf Wunsch übernehmen wir auch Produktion und Abfüllung.</p></li>
+        </ol>
+
+        <div class="recipe-order">
+          <div class="recipe-order-copy reveal">
+            <p class="eyebrow">Jetzt beauftragen</p>
+            <h3>Rezepturentwicklung anfragen</h3>
+            <p>Je genauer dein Briefing, desto schneller können wir dir ein passendes Angebot machen. Die Anfrage ist unverbindlich und kostenlos.</p>
+            <ul class="recipe-perks">
+              <li>Unverbindliches Angebot</li>
+              <li>Muster zur Verkostung</li>
+              <li>Abfüllung aus einer Hand möglich</li>
+            </ul>
+          </div>
+          <form class="contact-form recipe-form" id="recipe-form" novalidate>
+            <label>Name<input name="name" autocomplete="name" maxlength="100" required /></label>
+            <label>Unternehmen <small>(optional)</small><input name="company" autocomplete="organization" maxlength="120" /></label>
+            <label>E-Mail<input name="email" type="email" inputmode="email" autocomplete="email" maxlength="254" required /></label>
+            <label>Telefon <small>(optional)</small><input name="phone" type="tel" autocomplete="tel" maxlength="40" /></label>
+            <label>Getränkeart
+              <select name="drinkType" required>
+                <option value="">Bitte wählen</option>
+                <option>Limonade</option>
+                <option>Energy Drink</option>
+                <option>Eistee</option>
+                <option>Saftschorle / Fruchtsaftgetränk</option>
+                <option>Sirup / Konzentrat</option>
+                <option>Funktionsgetränk</option>
+                <option>Sonstiges</option>
+              </select>
+            </label>
+            <label>Projekt
+              <select name="projectType" required>
+                <option value="">Bitte wählen</option>
+                <option>Neue Marke / neues Produkt</option>
+                <option>Eigenmarke (Private Label)</option>
+                <option>Bestehende Rezeptur optimieren</option>
+                <option>Zucker reduzieren / zuckerfrei umstellen</option>
+              </select>
+            </label>
+            <label>Geplante Menge
+              <select name="volume">
+                <option value="">Noch offen</option>
+                <option>Bis 1.000 Liter</option>
+                <option>1.000 – 10.000 Liter</option>
+                <option>10.000 – 50.000 Liter</option>
+                <option>Über 50.000 Liter</option>
+              </select>
+            </label>
+            <label>Gewünschter Start
+              <select name="timeline">
+                <option value="">Noch offen</option>
+                <option>So schnell wie möglich</option>
+                <option>In 1–3 Monaten</option>
+                <option>In 3–6 Monaten</option>
+                <option>Später als 6 Monate</option>
+              </select>
+            </label>
+            <fieldset class="recipe-options">
+              <legend>Anforderungen <small>(optional)</small></legend>
+              <label><input type="checkbox" name="requirements" value="Zuckerfrei / zuckerreduziert" /> Zuckerfrei / reduziert</label>
+              <label><input type="checkbox" name="requirements" value="Vegan" /> Vegan</label>
+              <label><input type="checkbox" name="requirements" value="Bio" /> Bio</label>
+              <label><input type="checkbox" name="requirements" value="Mit Koffein" /> Mit Koffein</label>
+              <label><input type="checkbox" name="requirements" value="Natürliche Aromen" /> Natürliche Aromen</label>
+              <label><input type="checkbox" name="requirements" value="Mit Kohlensäure" /> Mit Kohlensäure</label>
+              <label><input type="checkbox" name="requirements" value="Abfüllung durch ZYRO gewünscht" /> Abfüllung durch ZYRO</label>
+            </fieldset>
+            <label class="recipe-wide">Deine Idee<textarea name="message" rows="5" minlength="20" maxlength="2500" required placeholder="Geschmack, Zielgruppe, Gebinde (Dose, Flasche …), Vorbilder, Budget – alles, was uns hilft."></textarea></label>
+            <div class="contact-honeypot" aria-hidden="true"><label>Website<input name="website" tabindex="-1" autocomplete="off" /></label></div>
+            <button class="contact-submit recipe-wide" type="submit"><span>Rezepturentwicklung anfragen</span><span aria-hidden="true">↗</span></button>
+            <p class="contact-status recipe-wide" id="recipe-status" role="status" aria-live="polite"></p>
+            <p class="contact-privacy recipe-wide">Mit dem Absenden werden deine Angaben zur Bearbeitung der Anfrage verarbeitet. <a href="/datenschutz.html">Datenschutzhinweise</a>.</p>
+          </form>
+        </div>
+      </section>
+
+      <section class="faq-section" id="faq" aria-labelledby="faq-title">
+        <div class="faq-head reveal">
+          <p class="eyebrow">FAQ</p>
+          <h2 id="faq-title">HÄUFIGE<br /><em>FRAGEN.</em></h2>
+          <p>Deine Frage ist nicht dabei? <a href="#kontakt">Schreib uns</a> – wir antworten so schnell wie möglich.</p>
+        </div>
+        <div class="faq-groups">
+          <div class="faq-group">
+            <h3>Bestellung &amp; Versand</h3>
+            <details><summary>Wie bestelle ich bei ZYRO?</summary><p>Wähle im <a href="#sortiment">Sortiment</a> deine Artikel, lege sie in den Warenkorb und schließe die Bestellung an der Kasse ab. Ein Kundenkonto ist nicht nötig, macht aber spätere Bestellungen und den Abruf von Rechnungen einfacher.</p></details>
+            <details><summary>Wie wird geliefert?</summary><p>Wir versenden per DPD bis an deine Haustür. Die Versandkosten siehst du im Warenkorb, bevor du bestellst. Große Geschäftskunden-Bestellungen liefern wir per Spedition.</p></details>
+            <details><summary>Kann ich meine Sendung verfolgen?</summary><p>Ja. Sobald deine Bestellung unterwegs ist, bekommst du eine E-Mail mit Sendungsnummer. Den Status kannst du jederzeit in der <a href="/tracking.html">Sendungsverfolgung</a> prüfen.</p></details>
+            <details><summary>Welche Zahlarten gibt es?</summary><p>Du kannst online mit Karte, Apple Pay oder SEPA bezahlen. Je nach Bestellung steht außerdem Vorkasse per Überweisung zur Verfügung.</p></details>
+            <details><summary>Ist im Preis Pfand enthalten?</summary><p>Auf Getränkedosen wird gesetzliches Einwegpfand erhoben. Das Pfand wird im Warenkorb und an der Kasse separat ausgewiesen.</p></details>
+            <details><summary>Kann ich meine Bestellung widerrufen?</summary><p>Ja, als Verbraucher:in hast du ein gesetzliches Widerrufsrecht. Alle Details findest du in der <a href="/widerruf.html">Widerrufsbelehrung</a>; den Widerruf kannst du direkt <a href="/widerruf-erklaeren">online erklären</a>.</p></details>
+          </div>
+          <div class="faq-group">
+            <h3>Produkte &amp; Handel</h3>
+            <details><summary>Ist ZYRO zuckerfrei?</summary><p>Unsere Pfirsich-Maracuja-Limonade ist zuckerfrei. Zutaten und Nährwerte findest du jeweils in der Produktansicht im Shop.</p></details>
+            <details><summary>Wo wird ZYRO hergestellt?</summary><p>ZYRO kommt direkt vom Hersteller aus Siegen – du bestellst ohne Zwischenhandel.</p></details>
+            <details><summary>Ich habe einen Laden oder eine Gastronomie – wie bekomme ich Händlerpreise?</summary><p>Registriere dich unter „Mein Konto“, vervollständige dein Firmenprofil und beantrage den Geschäftskundenstatus. Nach unserer Prüfung schalten wir dir den <a href="/brand.html?bereich=geschaeftskunden">Geschäftskunden-Shop</a> mit Traypreisen frei.</p></details>
+            <details><summary>Kann ich ZYRO für ein Event anfragen?</summary><p>Gerne! Schick uns über das <a href="#kontakt">Kontaktformular</a> Datum, Ort und ungefähre Menge – wir melden uns mit einem Angebot.</p></details>
+          </div>
+          <div class="faq-group">
+            <h3>Rezepturentwicklung</h3>
+            <details><summary>Was kostet eine Rezepturentwicklung?</summary><p>Das hängt von Getränkeart, Anforderungen und Anzahl der Musterrunden ab. Nach deiner Anfrage und einem kurzen Erstgespräch bekommst du ein unverbindliches Festpreisangebot.</p></details>
+            <details><summary>Wie lange dauert die Entwicklung?</summary><p>Je nach Komplexität meist einige Wochen vom Briefing bis zur fertigen Rezeptur. Einen realistischen Zeitplan nennen wir dir im Angebot.</p></details>
+            <details><summary>Wem gehört die fertige Rezeptur?</summary><p>Die Nutzungs- und Eigentumsrechte an der Rezeptur regeln wir transparent im Angebot bzw. Vertrag – in der Regel kannst du die Rezeptur exklusiv für deine Marke nutzen.</p></details>
+            <details><summary>Könnt ihr mein Getränk auch abfüllen?</summary><p>Ja. Wenn du möchtest, übernehmen wir nach der Entwicklung auch Produktion und Abfüllung. Kreuze dafür im Formular „Abfüllung durch ZYRO“ an.</p></details>
+            <details><summary>Ist meine Idee bei euch vertraulich?</summary><p>Selbstverständlich. Deine Angaben nutzen wir ausschließlich für dein Projekt. Auf Wunsch unterzeichnen wir vor dem Erstgespräch eine Vertraulichkeitsvereinbarung (NDA).</p></details>
+          </div>
         </div>
       </section>
 
